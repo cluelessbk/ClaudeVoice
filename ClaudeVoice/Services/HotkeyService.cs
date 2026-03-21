@@ -60,6 +60,9 @@ public class HotkeyService : IDisposable
     private const ushort HID_USAGE_PAGE_CONSUMER  = 0x000C;  // consumer controls page (simpler headsets)
     private const ushort HID_USAGE_PHONE_MUTE     = 0x002F;  // telephony: Phone Mute
     private const ushort HID_USAGE_CONSUMER_MUTE  = 0x00E2;  // consumer: Mute
+    private const ushort HID_USAGE_HOOK_SWITCH     = 0x0020;  // telephony: Hook Switch (answer/end button)
+    private const ushort HID_USAGE_CONSUMER_PLAY   = 0x00CD;  // consumer: Play/Pause
+    private const ushort HID_USAGE_JABRA_PLAY      = 0x0080;  // consumer: Jabra Link 380 Play button
 
     private readonly IntPtr _hwnd;
     private HwndSource? _source;
@@ -85,6 +88,9 @@ public class HotkeyService : IDisposable
     public event Action? SpeakReleased;      // Ctrl+Space released
     public event Action? MediaSubmitPressed; // Headset Play when submit is pending
     public event Action? MediaCyclePressed;  // Headset Play when sessions with pending audio exist
+
+    // Fired when HID Play button (0x0080) is pressed on the headset
+    public event Action? HidButtonPressed;
 
     /// <summary>Set after a transcription lands — next Play press sends Enter.</summary>
     public void SetSubmitPending(bool pending) => _submitPending = pending;
@@ -289,6 +295,8 @@ public class HotkeyService : IDisposable
         }
     }
 
+    private volatile bool _hookSwitchDown = false;
+
     private void CheckMuteUsage(IntPtr preparsed, IntPtr reportPtr, uint reportLen, ushort usagePage, ushort muteUsage)
     {
         var usages    = new ushort[64];
@@ -297,9 +305,27 @@ public class HotkeyService : IDisposable
         if (result != HIDP_STATUS_SUCCESS) return;
 
         bool mutedNow = false;
+        bool buttonNow = false;
         for (int i = 0; i < usageLen; i++)
-            if (usages[i] == muteUsage) { mutedNow = true; break; }
+        {
+            if (usages[i] == muteUsage) mutedNow = true;
+            if (usages[i] == HID_USAGE_HOOK_SWITCH ||
+                usages[i] == HID_USAGE_CONSUMER_PLAY ||
+                usages[i] == HID_USAGE_JABRA_PLAY) buttonNow = true;
+        }
 
+        // Play button detection — fire on press (transition to true)
+        if (buttonNow && !_hookSwitchDown)
+        {
+            _hookSwitchDown = true;
+            HidButtonPressed?.Invoke();
+        }
+        else if (!buttonNow)
+        {
+            _hookSwitchDown = false;
+        }
+
+        // Mute handling (existing logic)
         // First report: initialise state silently (avoids a spurious event on app start)
         if (_micHidMuted == null) { _micHidMuted = mutedNow; return; }
         if (mutedNow == _micHidMuted) return; // no change

@@ -175,6 +175,11 @@ public class TtsService : IDisposable
         var (sessionId, _) = ParseQueueFilename(filePath);
         if (string.IsNullOrEmpty(sessionId)) sessionId = _activeSessionId;
 
+        // Auto-adopt: if no active session is set, treat the first incoming session as active.
+        // This makes single-terminal usage work without requiring explicit linking or selection.
+        if (string.IsNullOrEmpty(_activeSessionId) && !string.IsNullOrEmpty(sessionId))
+            _activeSessionId = sessionId;
+
         lock (_queueLock)
         {
             if (!_sessionQueues.TryGetValue(sessionId, out var queue))

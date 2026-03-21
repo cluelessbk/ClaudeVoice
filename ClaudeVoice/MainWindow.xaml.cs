@@ -47,7 +47,7 @@ public partial class MainWindow : Window
         {
             Task.Run(() => TerminalTypist.FocusAndType(text, _tts.ActiveProcessId));
             _hotkeys?.SetSubmitPending(true);
-            _jabra?.NotifyPending(); // ring Jabra headset: play button now acts as Enter
+            // TODO Phase 2: trigger Play button detection here once a solution is found
         };
 
         // Headset mic mute → start/stop recording (same as Ctrl+Space but hands-free).
@@ -59,13 +59,7 @@ public partial class MainWindow : Window
         _tts.PausedChanged += paused =>
             Dispatcher.Invoke(() => PausePlayButton.Content = paused ? "▶  Resume" : "⏸  Pause");
 
-        // Cancel any Jabra ring the moment TTS starts playing on the active terminal.
-        // This stops unwanted beeping during Flow 1 (active terminal auto-play).
-        // Cross-session badge rings (Flow 2) are triggered separately and are unaffected.
-        _tts.PlayingChanged += isPlaying =>
-        {
-            if (isPlaying) _jabra?.CancelPending();
-        };
+        _tts.PlayingChanged += _ => { }; // placeholder for future Play button restoration
 
         // Surface TTS errors to the UI so silent failures are visible
         _tts.TtsErrorOccurred += msg =>
@@ -80,7 +74,6 @@ public partial class MainWindow : Window
                 if (hasPending)
                 {
                     PlayPing();           // audible alert: another session is waiting
-                    _jabra?.NotifyPending(); // ring Jabra headset: play button cycles to it
                 }
                 UpdateCycleEnabled();
             });
@@ -111,6 +104,11 @@ public partial class MainWindow : Window
         _hotkeys.PrevTerminalPressed += () => Dispatcher.Invoke(() => SwitchTerminal(-1));
         _hotkeys.MediaSubmitPressed  += () => Task.Run(() => TerminalTypist.SendEnter(_tts.ActiveProcessId));
         _hotkeys.MediaCyclePressed   += () => Dispatcher.Invoke(CycleToPendingSession);
+        _hotkeys.HidButtonPressed    += () =>
+        {
+            // Raw HID Play button (0x0080) — ready for Phase 2 solution
+            _hotkeys.TriggerMediaPlay();
+        };
 
         _fw.Start();
         _terminals.Start();
@@ -121,11 +119,6 @@ public partial class MainWindow : Window
         _jabra = new JabraService();
         _jabra.MicUnmuted        += () => Dispatcher.Invoke(StartSpeak);
         _jabra.MicMuted          += () => Dispatcher.InvokeAsync(StopAndTranscribe);
-        _jabra.PlayButtonPressed += () =>
-        {
-            _jabra.CancelPending();       // stop ringing immediately
-            _hotkeys?.TriggerMediaPlay(); // submit if pending, else cycle session
-        };
         _jabra.Init();
         if (!_jabra.IsInitialized)
         {
@@ -264,9 +257,14 @@ public partial class MainWindow : Window
         _terminals.LinkTerminal(fg);
         FinishLink("");
 
-        // 3 seconds after linking, refresh the display name in case claudevoice_active.txt
-        // wasn't present at link time but gets written by the next tool use
+        // Auto-activate: if this is the first terminal linked, make it the active session
+        // immediately so TTS works without requiring the user to click it.
         var justLinked = _terminals.Sessions.LastOrDefault();
+        if (justLinked != null && _terminals.Sessions.Count == 1)
+        {
+            justLinked.IsActive = true;
+            _tts.SetActiveSession(justLinked.SessionId, justLinked.TranscriptPath, justLinked.ProcessId);
+        }
         if (justLinked != null)
         {
             var refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -303,7 +301,6 @@ public partial class MainWindow : Window
             _tts.SetActiveSession(session.SessionId, session.TranscriptPath, session.ProcessId);
 
             session.HasPending = false;
-            _jabra?.CancelPending();
             UpdateCycleEnabled();
         }
     }
@@ -352,7 +349,6 @@ public partial class MainWindow : Window
 
         _tts.SetActiveSession(session.SessionId, session.TranscriptPath, session.ProcessId);
         session.HasPending = false;
-        _jabra?.CancelPending();
         UpdateCycleEnabled();
     }
 
@@ -376,7 +372,6 @@ public partial class MainWindow : Window
 
         _tts.SetActiveSession(next.SessionId, next.TranscriptPath, next.ProcessId);
         next.HasPending = false;
-        _jabra?.CancelPending();
         UpdateCycleEnabled();
     }
 
