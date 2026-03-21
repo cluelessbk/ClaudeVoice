@@ -1,0 +1,300 @@
+<Window x:Class="ClaudeVoice.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ClaudeVoice"
+        Width="320" Height="652"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ResizeMode="NoResize"
+        Topmost="True"
+        ShowInTaskbar="True"
+        Left="100" Top="100">
+
+  <Window.Effect>
+    <DropShadowEffect Color="Black" BlurRadius="20" ShadowDepth="0" Opacity="0.7"/>
+  </Window.Effect>
+
+  <!-- Outer border gives rounded corners -->
+  <Border Background="{StaticResource BgBrush}"
+          CornerRadius="12"
+          BorderBrush="#2a2a4a"
+          BorderThickness="1">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="40"/>   <!-- drag bar -->
+        <RowDefinition Height="*"/>    <!-- content -->
+      </Grid.RowDefinitions>
+
+      <!-- ── Drag bar ── -->
+      <Border Grid.Row="0"
+              Background="#0d0d1e"
+              CornerRadius="12,12,0,0"
+              MouseLeftButtonDown="DragBar_MouseDown">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+
+          <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0">
+            <Ellipse Width="8" Height="8" Fill="{StaticResource AccentBrush}" Margin="0,0,6,0"/>
+            <TextBlock Text="Claude Voice"
+                       Foreground="{StaticResource TextBrush}"
+                       FontSize="12" FontWeight="SemiBold"
+                       VerticalAlignment="Center"/>
+          </StackPanel>
+
+          <Button Grid.Column="1" Content="─"
+                  Style="{StaticResource ChromeButtonStyle}"
+                  Click="MinimiseButton_Click"
+                  ToolTip="Minimise"/>
+          <Button Grid.Column="2" Content="✕"
+                  Style="{StaticResource ChromeButtonStyle}"
+                  Click="CloseButton_Click"
+                  ToolTip="Close"/>
+        </Grid>
+      </Border>
+
+      <!-- ── Main content ── -->
+      <StackPanel Grid.Row="1" Margin="12">
+
+        <!-- Speak button -->
+        <Border Margin="0,8,0,12" CornerRadius="8" Padding="2">
+          <Button x:Name="SpeakButton"
+                  Height="90"
+                  Background="#0f3460"
+                  BorderBrush="#1a4a80"
+                  BorderThickness="2"
+                  PreviewMouseLeftButtonDown="SpeakButton_MouseDown"
+                  PreviewMouseLeftButtonUp="SpeakButton_MouseUp">
+            <Button.Template>
+              <ControlTemplate TargetType="Button">
+                <Border x:Name="Bd"
+                        Background="{TemplateBinding Background}"
+                        BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="8">
+                  <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Bd" Property="Background" Value="#1a4a80"/>
+                  </Trigger>
+                  <Trigger Property="IsPressed" Value="True">
+                    <Setter TargetName="Bd" Property="Background" Value="#0a2040"/>
+                  </Trigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Button.Template>
+            <StackPanel HorizontalAlignment="Center">
+              <TextBlock x:Name="SpeakIcon" Text="🎤" FontSize="28" HorizontalAlignment="Center"/>
+              <TextBlock x:Name="SpeakLabel" Text="SPEAK"
+                         Foreground="{StaticResource AccentBrush}"
+                         FontSize="14" FontWeight="Bold"
+                         HorizontalAlignment="Center" Margin="0,2,0,0"/>
+              <TextBlock x:Name="SpeakStatus" Text="Ready"
+                         Foreground="{StaticResource SubtextBrush}"
+                         FontSize="11" HorizontalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+        </Border>
+
+        <!-- Separator -->
+        <Border Height="1" Background="#2a2a4a" Margin="0,0,0,8"/>
+
+        <!-- Terminals section -->
+        <TextBlock Text="TERMINALS"
+                   Foreground="{StaticResource SubtextBrush}"
+                   FontSize="10" FontWeight="Bold"
+                   Margin="0,0,0,4"/>
+
+        <ItemsControl x:Name="TerminalsList"
+                      MinHeight="60" MaxHeight="110"
+                      Margin="0,0,0,8">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border Background="{Binding RowBackground}"
+                      CornerRadius="4" Margin="0,1"
+                      Cursor="Hand"
+                      MouseLeftButtonDown="TerminalRow_Click"
+                      Padding="8,5">
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="{Binding StatusIcon}" Margin="0,0,6,0" FontSize="12">
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock">
+                        <Style.Triggers>
+                          <!-- Pulse the 🔔 icon when this session has pending audio -->
+                          <DataTrigger Binding="{Binding HasPending}" Value="True">
+                            <Setter Property="Foreground" Value="#e8a317"/>
+                            <DataTrigger.EnterActions>
+                              <BeginStoryboard x:Name="PendingPulse">
+                                <Storyboard RepeatBehavior="Forever">
+                                  <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                   From="1.0" To="0.15"
+                                                   Duration="0:0:0.55"
+                                                   AutoReverse="True"/>
+                                </Storyboard>
+                              </BeginStoryboard>
+                            </DataTrigger.EnterActions>
+                            <DataTrigger.ExitActions>
+                              <StopStoryboard BeginStoryboardName="PendingPulse"/>
+                            </DataTrigger.ExitActions>
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
+                  <TextBlock Text="{Binding DisplayName}"
+                             Foreground="{StaticResource TextBrush}"
+                             FontSize="12" VerticalAlignment="Center"/>
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- Link status feedback (shown briefly during the link gesture) -->
+        <TextBlock x:Name="LinkStatus"
+                   Foreground="{StaticResource SubtextBrush}"
+                   FontSize="10" TextAlignment="Center"
+                   Margin="0,0,0,4"/>
+
+        <!-- Always-visible link button: click to add a new linked terminal -->
+        <Button x:Name="LinkButton"
+                Content="+ Link terminal"
+                Style="{StaticResource ActionButtonStyle}"
+                Click="LinkButton_Click"
+                Margin="0,0,0,8"/>
+
+        <!-- Separator -->
+        <Border Height="1" Background="#2a2a4a" Margin="0,0,0,10"/>
+
+        <!-- TTS toggle -->
+        <Grid Margin="0,0,0,8">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <TextBlock Grid.Column="0" Text="Voice"
+                     Foreground="{StaticResource SubtextBrush}"
+                     FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+          <ToggleButton x:Name="TtsToggle" Grid.Column="1"
+                        HorizontalAlignment="Center"
+                        Width="50" Height="24"
+                        Checked="TtsToggle_Checked"
+                        Unchecked="TtsToggle_Unchecked"
+                        Template="{StaticResource ToggleSwitchTemplate}"/>
+          <TextBlock x:Name="TtsStatusLabel" Grid.Column="2"
+                     Text="ON" Foreground="{StaticResource AccentBrush}"
+                     FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+        </Grid>
+
+        <!-- Speed control -->
+        <Grid Margin="0,0,0,12">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <TextBlock Grid.Column="0" Text="Speed"
+                     Foreground="{StaticResource SubtextBrush}"
+                     FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0"/>
+          <Button Grid.Column="1" Content="−" HorizontalAlignment="Left"
+                  Style="{StaticResource SpeedButtonStyle}" Click="SlowDown_Click"/>
+          <TextBlock x:Name="RateLabel" Grid.Column="2"
+                     Text="+0%" Foreground="{StaticResource TextBrush}"
+                     FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center"
+                     MinWidth="36" TextAlignment="Center"/>
+          <Button Grid.Column="3" Content="+" HorizontalAlignment="Right"
+                  Style="{StaticResource SpeedButtonStyle}" Click="SpeedUp_Click"/>
+        </Grid>
+
+        <!-- Action buttons -->
+        <Grid Margin="0,0,0,10">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="6"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="6"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <Button Grid.Column="0" Content="▶  Replay"
+                  Style="{StaticResource ActionButtonStyle}"
+                  Click="ReRead_Click"/>
+          <Button x:Name="PausePlayButton" Grid.Column="2" Content="⏸  Pause"
+                  Style="{StaticResource ActionButtonStyle}"
+                  Click="PausePlay_Click"/>
+          <Button Grid.Column="4" Content="⏹  Stop"
+                  Style="{StaticResource ActionButtonStyle}"
+                  Click="Stop_Click"/>
+        </Grid>
+
+        <!-- Separator -->
+        <Border Height="1" Background="#2a2a4a" Margin="0,0,0,8"/>
+
+        <!-- Hotkey reference -->
+        <TextBlock Text="HOTKEYS  —  global, work in any window"
+                   Foreground="{StaticResource SubtextBrush}"
+                   FontSize="10" FontWeight="Bold" Margin="0,0,0,6"/>
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="120"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="18"/>
+          </Grid.RowDefinitions>
+
+          <TextBlock Grid.Row="0" Grid.Column="0" Text="Ctrl+Space"       Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="0" Grid.Column="1" Text="Record / stop recording" Foreground="{StaticResource TextBrush}" FontSize="10"/>
+
+          <TextBlock Grid.Row="1" Grid.Column="0" Text="Ctrl+Shift+P"     Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="1" Grid.Column="1" Text="Pause / resume"   Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+
+          <TextBlock Grid.Row="2" Grid.Column="0" Text="Ctrl+Shift+X"     Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="2" Grid.Column="1" Text="Stop audio"       Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+
+          <TextBlock Grid.Row="3" Grid.Column="0" Text="Ctrl+Shift+R"     Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="3" Grid.Column="1" Text="Replay last"      Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+
+          <TextBlock Grid.Row="4" Grid.Column="0" Text="Ctrl+Alt+T"       Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="4" Grid.Column="1" Text="Toggle voice on/off" Foreground="{StaticResource TextBrush}" FontSize="10"/>
+
+          <TextBlock Grid.Row="5" Grid.Column="0" Text="Ctrl+Alt+↑"       Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="5" Grid.Column="1" Text="Speed up"         Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+
+          <TextBlock Grid.Row="6" Grid.Column="0" Text="Ctrl+Alt+↓"       Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="6" Grid.Column="1" Text="Slow down"        Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+
+          <TextBlock Grid.Row="7" Grid.Column="0" Text="Ctrl+Alt+← / →"  Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="7" Grid.Column="1" Text="Switch terminal"  Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+
+          <TextBlock Grid.Row="8"  Grid.Column="0" Text="Headset unmute"  Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="8"  Grid.Column="1" Text="Start recording" Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+
+          <TextBlock Grid.Row="9"  Grid.Column="0" Text="Headset mute"    Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="9"  Grid.Column="1" Text="Stop + transcribe" Foreground="{StaticResource TextBrush}"  FontSize="10"/>
+
+          <TextBlock Grid.Row="10" Grid.Column="0" Text="Headset ▶ play"  Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="10" Grid.Column="1" Text="Submit message"  Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+        </Grid>
+
+      </StackPanel>
+    </Grid>
+  </Border>
+</Window>
