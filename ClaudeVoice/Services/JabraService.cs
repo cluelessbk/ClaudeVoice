@@ -7,11 +7,12 @@ namespace ClaudeVoice.Services;
 
 /// <summary>
 /// Registers ClaudeVoice as a Jabra softphone application so the physical
-/// mic arm fires MuteState events directly into the app — exactly like Teams does.
+/// mic arm fires MuteState events and the hang-up button fires CallActive.
 ///
-/// Play button status: NOT YET WORKING. See Phase 2 notes in CLAUDE.md for details.
-/// The Jabra SDK consumes the Play button when callActive=true (needed for mic arm).
-/// HotkeyService has HID 0x0080 detection ready for when a solution is found.
+/// Hang-up button solution: with callActive=true, pressing hang-up triggers
+/// CallActive→False. We immediately call StartCall() to restore mic arm,
+/// wait 300ms for the SDK to settle, then fire HangUpPressed so the app
+/// can send Enter to the terminal via PowerShell SendKeys.
 /// </summary>
 public class JabraService : IDisposable
 {
@@ -32,6 +33,9 @@ public class JabraService : IDisposable
 
     /// <summary>Fired when arm goes down (mic unmuted) → start recording.</summary>
     public event Action? MicUnmuted;
+
+    /// <summary>Fired when the hang-up button is pressed on the headset.</summary>
+    public event Action? HangUpPressed;
 
     public void Init()
     {
@@ -76,6 +80,25 @@ public class JabraService : IDisposable
                 {
                     case MuteState.Muted:   MicMuted?.Invoke();   break;
                     case MuteState.Unmuted: MicUnmuted?.Invoke(); break;
+                }
+            }));
+
+            _subscriptions.Add(ecc.CallActive.Subscribe(async active =>
+            {
+                if (_disposed) return;
+
+                if (!active)
+                {
+                    // Hang-up button pressed — restore call mode so mic arm keeps working
+                    try { await ecc.StartCall(); }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[JabraService] StartCall() failed: {ex.Message}");
+                    }
+
+                    // Let SDK finish its own key handling, then fire our event
+                    await Task.Delay(300);
+                    HangUpPressed?.Invoke();
                 }
             }));
 

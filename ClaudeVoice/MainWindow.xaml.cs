@@ -119,6 +119,7 @@ public partial class MainWindow : Window
         _jabra = new JabraService();
         _jabra.MicUnmuted        += () => Dispatcher.Invoke(StartSpeak);
         _jabra.MicMuted          += () => Dispatcher.InvokeAsync(StopAndTranscribe);
+        _jabra.HangUpPressed     += () => Task.Run(() => TerminalTypist.SendEnter(_tts.ActiveProcessId));
         _jabra.Init();
         if (!_jabra.IsInitialized)
         {

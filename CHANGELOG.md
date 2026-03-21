@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 — 2026-03-21
+
+### Added
+- Jabra hang-up button sends Enter to Claude terminal (Phase 2 complete)
+- JabraService detects hang-up via CallActive observable, restores call mode with StartCall(), fires HangUpPressed event
+- TerminalTypist.SendEnter uses PowerShell SendKeys (SendInput doesn't reach Windows Terminal)
+
 ## 0.2.0 — 2026-03-21
 
 ### Fixed

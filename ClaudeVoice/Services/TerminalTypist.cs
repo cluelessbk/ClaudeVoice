@@ -179,15 +179,8 @@ public static class TerminalTypist
 
         Thread.Sleep(150);
 
-        // Inject Enter directly via SendInput — synchronous and process-free.
-        // PowerShell SendKeys was unreliable because the process took ~200-300 ms
-        // to start, by which time the window could have lost focus.
-        var inputs = new INPUT[]
-        {
-            new INPUT { type = INPUT_KEYBOARD, u = new INPUTUNION { ki = new KEYBDINPUT { wVk = VK_RETURN } } },
-            new INPUT { type = INPUT_KEYBOARD, u = new INPUTUNION { ki = new KEYBDINPUT { wVk = VK_RETURN, dwFlags = KEYEVENTF_KEYUP } } },
-        };
-        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        // Use PowerShell SendKeys — SendInput with VK_RETURN doesn't reach Windows Terminal.
+        SendViaPowerShell("{ENTER}");
     }
 
     // ── Type into the focused window ──────────────────────────────────────────

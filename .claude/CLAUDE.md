@@ -57,31 +57,16 @@ Five phases to get ClaudeVoice fully working. Mark each `[x]` when complete.
 Root cause: `_activeSessionId` was always empty — TTS only plays for the active session but no session was ever set active. Audio queue files piled up unconsumed.
 Fix: auto-adopt first incoming session ID in `TtsService.OnAudioFileArrived`; auto-activate first linked terminal in MainWindow. TTS now works without explicit linking for single-session use.
 
-### Phase 2: Jabra Play → Enter `[ ]`
-**Status: blocked — needs alternative approach.**
-Headset: Jabra Link 380. The Jabra SDK has a mode conflict that prevents detecting the Play button while mic arm works:
-- `callActive=true` → mic arm MuteState works ✅, Play button consumed by SDK with NO event and NO HID ❌
-- `callActive=false` → Play button sends HID 0x0080 (consumer page 0x000C) ✅, mic arm stops firing ❌
-- CallActive observable does NOT fire when Play is pressed with callActive=true
-- Toggle approach (EndCall→detect HID→Teardown+recreate ECC) tested but RestoreCallMode doesn't reliably restore mic arm
+### Phase 2: Jabra Hang-Up → Enter `[x]`
+Play button was unsolvable (SDK consumes it with callActive=true, no event or HID). Used the **hang-up button** instead:
+- With `callActive=true`, pressing hang-up fires `CallActive→False` on the `ISingleCallControl` observable
+- On `CallActive→False`: call `StartCall()` to restore call mode (mic arm keeps working), wait 300ms for SDK to settle, then fire `HangUpPressed` event
+- MainWindow wires `HangUpPressed` → `TerminalTypist.SendEnter()` which focuses the terminal and sends Enter via PowerShell `SendKeys("{ENTER}")` (SendInput with VK_RETURN doesn't reach Windows Terminal)
 
-**What was tested and failed:**
-1. CallActive subscription with callActive=true — Play press produces no event
-2. SignalIncomingCall ring loop — Play press during ring produces no event
-3. Raw HID detection with callActive=true — Play button sends no HID at all
-4. Toggle: EndCall→HID→RestoreCallMode — HID works but mic arm breaks after restore
-
-**What works:**
-- HID 0x0080 detection in HotkeyService (HidButtonPressed event) — fires reliably when callActive=false
-- Volume buttons always send HID regardless of mode (0x00E9 up, 0x00EA down)
-- Keyboard VK_MEDIA_PLAY_PAUSE hook — works for non-Jabra headsets
-
-**Ideas not yet tried:**
-- Jabra Direct software button remapping (zero code if supported)
-- AutoHotkey script to intercept at OS level
-- Lower-level ICallControl raw signals instead of EasyCallControl
-- External listener process with direct HID device access
-- Remap a different physical action (e.g. double-tap volume) to submit
+**What failed (Play button — kept for reference):**
+1. CallActive subscription — Play press produces no event with callActive=true
+2. Raw HID detection — Play button sends no HID with callActive=true
+3. Toggle EndCall→HID→RestoreCallMode — mic arm breaks after restore
 
 ### Phase 3: Flow 1 — Active session end-to-end `[ ]`
 Mic down → speak → mic up (transcribes) → Enter or Play button → Claude answers → 5-sec delay → TTS reads response. Active session only, no beeps, no queue.
@@ -101,7 +86,6 @@ Mic down → speak → mic up (transcribes) → Enter or Play button → Claude 
 ## Known issues
 
 1. ~~TTS not playing~~ — FIXED (Phase 1)
-2. Headset Play button doesn't send Enter — blocked, needs alternative approach (→ Phase 2)
-3. JabraService has leftover toggle code from failed Phase 2 attempts — needs cleanup
-4. HotkeyService has HidButtonPressed event + 0x0080 detection — keep for future Play button solution
-5. Closed terminals remain in session list (→ Phase 5)
+2. ~~Headset button doesn't send Enter~~ — FIXED (Phase 2, using hang-up button)
+3. HotkeyService has HidButtonPressed event + 0x0080 detection — unused now, could remove or keep for non-Jabra headsets
+4. Closed terminals remain in session list (→ Phase 5)
