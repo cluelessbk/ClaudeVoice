@@ -46,8 +46,9 @@ public class TerminalService : IDisposable
     {
         GetWindowThreadProcessId(hwnd, out uint pid);
 
-        // Don't link the same process twice
-        if (Sessions.Any(s => s.ProcessId == (int)pid)) return;
+        // Don't link the same window twice (using HWND, not PID — Windows Terminal
+        // shares a single PID across all its windows, so PID check blocks the second link)
+        if (Sessions.Any(s => s.WindowHandle == hwnd)) return;
 
         // Walk the terminal's process tree to find the right per-process hook file.
         // This prevents cross-contamination when multiple Claude sessions are running.

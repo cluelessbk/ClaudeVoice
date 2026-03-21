@@ -23,6 +23,10 @@ public partial class MainWindow : Window
     private int  _ttsRate    = 0;
     private bool _ttsEnabled = true;
 
+    // Beep notification: tracks when each session became pending (for the 5-min schedule)
+    private readonly Dictionary<string, DateTime> _pendingNotifyStart = new();
+    private DispatcherTimer? _notifyTimer;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -41,13 +45,13 @@ public partial class MainWindow : Window
             Dispatcher.Invoke(UpdateActiveSession);
 
         // STT: transcribed text goes to the specific Claude terminal for the active session.
-        // ActiveProcessId is a volatile int on TtsService — safe to read from any thread.
+        // ActiveWindowHandle targets the exact window (safe even when Windows Terminal shares a PID).
         _stt.StateChanged += state => Dispatcher.Invoke(() => UpdateSpeakButton(state));
         _stt.Transcribed  += text =>
         {
-            Task.Run(() => TerminalTypist.FocusAndType(text, _tts.ActiveProcessId));
+            var hwnd = _tts.ActiveWindowHandle;
+            Task.Run(() => TerminalTypist.FocusAndType(text, hwnd));
             _hotkeys?.SetSubmitPending(true);
-            // TODO Phase 2: trigger Play button detection here once a solution is found
         };
 
         // Headset mic mute → start/stop recording (same as Ctrl+Space but hands-free).
@@ -65,16 +69,16 @@ public partial class MainWindow : Window
         _tts.TtsErrorOccurred += msg =>
             Dispatcher.Invoke(() => LinkStatus.Text = $"TTS error: {msg[..Math.Min(60, msg.Length)]}");
 
-        // Badge: a session has pending audio
+        // Badge: a session has pending audio — start beep notification schedule
         _tts.SessionPendingChanged += (sessionId, hasPending) =>
             Dispatcher.Invoke(() =>
             {
                 var session = _terminals.Sessions.FirstOrDefault(s => s.SessionId == sessionId);
                 if (session != null) session.HasPending = hasPending;
                 if (hasPending)
-                {
-                    PlayPing();           // audible alert: another session is waiting
-                }
+                    StartPendingNotification(sessionId);
+                else
+                    StopPendingNotification(sessionId);
                 UpdateCycleEnabled();
             });
 
@@ -102,7 +106,7 @@ public partial class MainWindow : Window
         _hotkeys.PauseTogglePressed += () => _tts.TogglePause();
         _hotkeys.NextTerminalPressed += () => Dispatcher.Invoke(() => SwitchTerminal(+1));
         _hotkeys.PrevTerminalPressed += () => Dispatcher.Invoke(() => SwitchTerminal(-1));
-        _hotkeys.MediaSubmitPressed  += () => Task.Run(() => TerminalTypist.SendEnter(_tts.ActiveProcessId));
+        _hotkeys.MediaSubmitPressed  += () => Task.Run(() => TerminalTypist.SendEnter(_tts.ActiveWindowHandle));
         _hotkeys.MediaCyclePressed   += () => Dispatcher.Invoke(CycleToPendingSession);
         _hotkeys.HidButtonPressed    += () =>
         {
@@ -119,7 +123,12 @@ public partial class MainWindow : Window
         _jabra = new JabraService();
         _jabra.MicUnmuted        += () => Dispatcher.Invoke(StartSpeak);
         _jabra.MicMuted          += () => Dispatcher.InvokeAsync(StopAndTranscribe);
-        _jabra.HangUpPressed     += () => Task.Run(() => TerminalTypist.SendEnter(_tts.ActiveProcessId));
+        _jabra.HangUpPressed     += () =>
+        {
+            // Priority: submit transcription > cycle to pending session > send Enter (fallback)
+            if (_hotkeys != null && _hotkeys.TriggerMediaPlay()) return;
+            Task.Run(() => TerminalTypist.SendEnter(_tts.ActiveWindowHandle));
+        };
         _jabra.Init();
         if (!_jabra.IsInitialized)
         {
@@ -264,7 +273,7 @@ public partial class MainWindow : Window
         if (justLinked != null && _terminals.Sessions.Count == 1)
         {
             justLinked.IsActive = true;
-            _tts.SetActiveSession(justLinked.SessionId, justLinked.TranscriptPath, justLinked.ProcessId);
+            _tts.SetActiveSession(justLinked.SessionId, justLinked.TranscriptPath, justLinked.ProcessId, justLinked.WindowHandle);
         }
         if (justLinked != null)
         {
@@ -299,9 +308,10 @@ public partial class MainWindow : Window
 
             // Tell TtsService — switches the audio queue, writes active_session.txt,
             // and stores the processId so TerminalTypist targets the right window
-            _tts.SetActiveSession(session.SessionId, session.TranscriptPath, session.ProcessId);
+            _tts.SetActiveSession(session.SessionId, session.TranscriptPath, session.ProcessId, session.WindowHandle);
 
             session.HasPending = false;
+            StopPendingNotification(session.SessionId);
             UpdateCycleEnabled();
         }
     }
@@ -326,7 +336,7 @@ public partial class MainWindow : Window
         {
             var only = _terminals.Sessions[0];
             only.IsActive = true;
-            _tts.SetActiveSession(only.SessionId, only.TranscriptPath, only.ProcessId);
+            _tts.SetActiveSession(only.SessionId, only.TranscriptPath, only.ProcessId, only.WindowHandle);
         }
 
         UpdateCycleEnabled();
@@ -348,8 +358,9 @@ public partial class MainWindow : Window
         foreach (var s in sessions)
             s.IsActive = s.SessionId == session.SessionId;
 
-        _tts.SetActiveSession(session.SessionId, session.TranscriptPath, session.ProcessId);
+        _tts.SetActiveSession(session.SessionId, session.TranscriptPath, session.ProcessId, session.WindowHandle);
         session.HasPending = false;
+        StopPendingNotification(session.SessionId);
         UpdateCycleEnabled();
     }
 
@@ -371,8 +382,9 @@ public partial class MainWindow : Window
         foreach (var s in _terminals.Sessions)
             s.IsActive = s.SessionId == next.SessionId;
 
-        _tts.SetActiveSession(next.SessionId, next.TranscriptPath, next.ProcessId);
+        _tts.SetActiveSession(next.SessionId, next.TranscriptPath, next.ProcessId, next.WindowHandle);
         next.HasPending = false;
+        StopPendingNotification(next.SessionId);
         UpdateCycleEnabled();
     }
 
@@ -463,6 +475,67 @@ public partial class MainWindow : Window
             }
             catch { }
         });
+    }
+
+    // ── Pending session notification schedule ───────────────────────────────
+
+    private void StartPendingNotification(string sessionId)
+    {
+        if (_pendingNotifyStart.ContainsKey(sessionId)) return; // already tracking
+
+        _pendingNotifyStart[sessionId] = DateTime.UtcNow;
+        PlayPing(); // immediate first beep
+
+        // Start the shared timer if not already running
+        if (_notifyTimer == null)
+        {
+            _notifyTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            _notifyTimer.Tick += NotifyTimer_Tick;
+            _notifyTimer.Start();
+        }
+    }
+
+    private void StopPendingNotification(string sessionId)
+    {
+        _pendingNotifyStart.Remove(sessionId);
+        if (_pendingNotifyStart.Count == 0 && _notifyTimer != null)
+        {
+            _notifyTimer.Stop();
+            _notifyTimer = null;
+        }
+    }
+
+    private void NotifyTimer_Tick(object? sender, EventArgs e)
+    {
+        var expired = new List<string>();
+        bool shouldBeep = false;
+
+        foreach (var (sessionId, startTime) in _pendingNotifyStart)
+        {
+            var elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
+
+            if (elapsed >= 300) // 5 minutes — stop notifying
+            {
+                expired.Add(sessionId);
+                continue;
+            }
+
+            // Beep in the first 10 seconds of each minute
+            if (elapsed % 60 < 10)
+                shouldBeep = true;
+        }
+
+        foreach (var id in expired)
+            _pendingNotifyStart.Remove(id);
+
+        if (_pendingNotifyStart.Count == 0 && _notifyTimer != null)
+        {
+            _notifyTimer.Stop();
+            _notifyTimer = null;
+        }
+
+        if (shouldBeep)
+            PlayPing();
     }
 
     // ── Window position ───────────────────────────────────────────────────────

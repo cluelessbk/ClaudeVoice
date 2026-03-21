@@ -71,17 +71,19 @@ Play button was unsolvable (SDK consumes it with callActive=true, no event or HI
 ### Phase 3: Flow 1 — Active session end-to-end `[ ]`
 Mic down → speak → mic up (transcribes) → Enter or Play button → Claude answers → 5-sec delay → TTS reads response. Active session only, no beeps, no queue.
 
-### Phase 4: Flow 2 — Multi-session queue `[ ]`
-- Non-active session gets Claude response → queue it, don't read
-- Beep notification: once every 10 sec for 1 min, then 1 min silence, repeat for 5 min total, then stop
-- Play button → jump to oldest pending session (arrival order), make active, read queued message
+### Phase 4: Flow 2 — Multi-session queue `[x]`
+- Non-active session gets Claude response → queued silently, not read
+- Beep notification: beeps in first 10 sec of each minute, silent 50 sec, repeats for 5 min, then stops
+- Hang-up button → priority: submit transcription > cycle to oldest pending session > send Enter (fallback)
 - Session stays pending silently if user never switches
+- Bug fix: second terminal can now be linked (HWND-based dedup instead of PID — Windows Terminal shares a PID)
+- Audio queue cleanup on app startup/shutdown prevents stale files from old sessions
 
 ### Phase 5: Terminal linking polish `[ ]`
 - "Link terminal" button → user clicks PowerShell window → app captures that window → shows in list
 - Terminal auto-removes from list when its process exits
 - Switch hotkey cycles all linked terminals in link order (not arrival order)
-- Play button cycles only terminals with pending messages (arrival order)
+- Hang-up button cycles only terminals with pending messages (arrival order)
 
 ## Known issues
 
@@ -89,3 +91,4 @@ Mic down → speak → mic up (transcribes) → Enter or Play button → Claude 
 2. ~~Headset button doesn't send Enter~~ — FIXED (Phase 2, using hang-up button)
 3. HotkeyService has HidButtonPressed event + 0x0080 detection — unused now, could remove or keep for non-Jabra headsets
 4. Closed terminals remain in session list (→ Phase 5)
+5. Phase 4 pending testing — beep schedule, hang-up cycling, and multi-terminal linking need end-to-end verification

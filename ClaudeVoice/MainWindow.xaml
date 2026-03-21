@@ -290,8 +290,8 @@
           <TextBlock Grid.Row="9"  Grid.Column="0" Text="Headset mute"    Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
           <TextBlock Grid.Row="9"  Grid.Column="1" Text="Stop + transcribe" Foreground="{StaticResource TextBrush}"  FontSize="10"/>
 
-          <TextBlock Grid.Row="10" Grid.Column="0" Text="Headset ▶ play"  Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="10" Grid.Column="1" Text="Submit message"  Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+          <TextBlock Grid.Row="10" Grid.Column="0" Text="Headset hang-up" Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="10" Grid.Column="1" Text="Submit / cycle pending" Foreground="{StaticResource TextBrush}" FontSize="10"/>
         </Grid>
 
       </StackPanel>

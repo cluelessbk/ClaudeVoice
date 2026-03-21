@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 — 2026-03-22
+
+### Added
+- Multi-session queue (Phase 4): beep notification schedule for pending sessions (10 sec beep, 50 sec silence per minute, 5 min total)
+- Hang-up button smart routing: submit transcription > cycle to pending session > send Enter (fallback)
+- HWND-based window targeting: FocusAndType and SendEnter can target exact windows
+
+### Fixed
+- Second terminal can now be linked (was blocked by PID-based duplicate check — Windows Terminal shares one PID across windows)
+- Audio queue cleanup on startup/shutdown prevents stale files from old sessions being replayed
+
 ## 0.3.0 — 2026-03-21
 
 ### Added

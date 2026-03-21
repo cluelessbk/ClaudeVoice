@@ -159,7 +159,39 @@ public static class TerminalTypist
         return -1;
     }
 
-    // ── SendEnter ─────────────────────────────────────────────────────────────
+    // ── HWND-based overloads ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Focus the given window handle and type text into it.
+    /// Preferred over the PID-based overload because it targets the exact window
+    /// (Windows Terminal shares one PID across all its windows).
+    /// </summary>
+    public static void FocusAndType(string text, IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) { FocusAndType(text, (int?)null); return; }
+
+        keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
+        SetForegroundWindow(hwnd);
+        keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        Thread.Sleep(150);
+        SendTextViaPowerShell(text);
+    }
+
+    /// <summary>
+    /// Focus the given window handle and press Enter.
+    /// </summary>
+    public static void SendEnter(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) { SendEnter((int?)null); return; }
+
+        keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
+        SetForegroundWindow(hwnd);
+        keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        Thread.Sleep(150);
+        SendViaPowerShell("{ENTER}");
+    }
+
+    // ── SendEnter (PID-based, fallback) ──────────────────────────────────────
 
     /// <summary>
     /// Focus the Claude terminal and press Enter — used by the headset Play button to submit.

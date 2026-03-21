@@ -102,17 +102,20 @@ public class HotkeyService : IDisposable
     /// Applies the same priority logic as the keyboard media play/pause key.
     /// Called by JabraService when the headset play/answer button fires a HookSwitch signal.
     /// </summary>
-    public void TriggerMediaPlay()
+    public bool TriggerMediaPlay()
     {
         if (_submitPending)
         {
             _submitPending = false;
             MediaSubmitPressed?.Invoke();
+            return true;
         }
-        else if (_cycleEnabled)
+        if (_cycleEnabled)
         {
             MediaCyclePressed?.Invoke();
+            return true;
         }
+        return false;
     }
 
     public HotkeyService(Window window)

@@ -38,6 +38,11 @@ public class TtsService : IDisposable
     private volatile int _activeProcessId = 0;
     public int? ActiveProcessId => _activeProcessId == 0 ? null : _activeProcessId;
 
+    // HWND of the active session's terminal window — targets the exact window
+    // even when Windows Terminal shares a PID across multiple windows.
+    private IntPtr _activeWindowHandle = IntPtr.Zero;
+    public IntPtr ActiveWindowHandle => _activeWindowHandle;
+
     // true = playback started, false = playback ended
     public event Action<bool>?         PlayingChanged;
     // fired when edge-tts fails — message surfaced to UI
@@ -63,9 +68,11 @@ public class TtsService : IDisposable
         fw.TtsEnabledChanged += v => _enabled = v;
         fw.TtsRateChanged    += v => _rate = v;
 
-        // Pick up any files already waiting in the queue folder
+        // Clear any stale queue files left over from a previous session.
+        // ClaudeVoice.exe is a single instance — files present at startup are always
+        // from a dead session (app wasn't running, so nothing could have played them).
         foreach (var f in fw.GetQueueFiles())
-            OnAudioFileArrived(f);
+            fw.DeleteQueueFile(f);
 
         Task.Run(() => ProcessLoop(_cts.Token));
     }
@@ -77,9 +84,10 @@ public class TtsService : IDisposable
     /// item to front of its queue) and starts playing the new session's queue.
     /// Clicking the already-active session toggles pause/resume.
     /// </summary>
-    public void SetActiveSession(string sessionId, string transcriptPath, int? processId = null)
+    public void SetActiveSession(string sessionId, string transcriptPath, int? processId = null, IntPtr windowHandle = default)
     {
-        _activeProcessId = processId ?? 0;
+        _activeProcessId    = processId ?? 0;
+        _activeWindowHandle = windowHandle;
 
         if (sessionId == _activeSessionId)
         {
@@ -467,5 +475,10 @@ public class TtsService : IDisposable
         _playLock.Dispose();
         _stopCts.Dispose();
         _cts.Dispose();
+
+        // Clean up queue folder on shutdown — files can't be played with the app closed,
+        // and this prevents them from being picked up as stale on next startup.
+        foreach (var f in _fw.GetQueueFiles())
+            _fw.DeleteQueueFile(f);
     }
 }
