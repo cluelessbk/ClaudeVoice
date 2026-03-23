@@ -50,7 +50,11 @@ public partial class MainWindow : Window
         _stt.Transcribed  += text =>
         {
             var hwnd = _tts.ActiveWindowHandle;
-            Task.Run(() => TerminalTypist.FocusAndType(text, hwnd));
+            Task.Run(() =>
+            {
+                TerminalTypist.FocusAndType(text, hwnd);
+                PlayTranscriptionDing();
+            });
             _hotkeys?.SetSubmitPending(true);
         };
 
@@ -530,6 +534,40 @@ public partial class MainWindow : Window
                 var taken = signal.Take(TimeSpan.FromMilliseconds(150));
                 using var player = new WaveOutEvent();
                 player.Init(taken);
+                player.Play();
+                while (player.PlaybackState == PlaybackState.Playing)
+                    System.Threading.Thread.Sleep(10);
+            }
+            catch { }
+        });
+    }
+
+    // ── Transcription-complete ding ─────────────────────────────────────────
+
+    private static void PlayTranscriptionDing()
+    {
+        // Two-tone rising ding (1200 Hz → 1500 Hz) to signal "transcription done, ready to submit".
+        // Distinct from the 880 Hz pending-session ping.
+        Task.Run(() =>
+        {
+            try
+            {
+                using var player = new WaveOutEvent();
+
+                // First tone: 1200 Hz for 80 ms
+                var tone1 = new SignalGenerator(22050, 1)
+                    { Gain = 0.30, Frequency = 1200, Type = SignalGeneratorType.Sin }
+                    .Take(TimeSpan.FromMilliseconds(80));
+
+                // Second tone: 1500 Hz for 100 ms
+                var tone2 = new SignalGenerator(22050, 1)
+                    { Gain = 0.30, Frequency = 1500, Type = SignalGeneratorType.Sin }
+                    .Take(TimeSpan.FromMilliseconds(100));
+
+                // Concatenate: tone1 then tone2
+                var combined = new ConcatenatingSampleProvider(new[] { tone1, tone2 });
+
+                player.Init(combined);
                 player.Play();
                 while (player.PlaybackState == PlaybackState.Playing)
                     System.Threading.Thread.Sleep(10);

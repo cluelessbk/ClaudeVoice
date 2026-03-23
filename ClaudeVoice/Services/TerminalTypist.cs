@@ -247,7 +247,8 @@ public static class TerminalTypist
                 CreateNoWindow  = true,
             };
             var proc = Process.Start(psi);
-            proc?.WaitForExitAsync().ContinueWith(_ => { try { File.Delete(tmpFile); } catch { } });
+            proc?.WaitForExit();
+            try { File.Delete(tmpFile); } catch { }
         }
         catch
         {

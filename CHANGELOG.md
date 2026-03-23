@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 — 2026-03-23
+
+### Added
+- Transcription-complete ding: rising two-tone sound (1200→1500 Hz) plays after text is fully typed into terminal, signaling ready to submit
+
+### Fixed
+- Pause button: now a true pause — audio freezes in place and resumes from exact position (was restarting from beginning)
+- Stop button: stops playback and clears active session queue only, preserves last queued item for Replay (was auto-replaying and keeping the interrupted item instead of the last)
+- Replay button: plays only the last queued part with nothing after it (was continuing with remaining queue)
+- Transcription ding timing: waits for PowerShell SendKeys to finish typing before playing (was firing immediately)
+
 ## 0.5.0 — 2026-03-23
 
 ### Added

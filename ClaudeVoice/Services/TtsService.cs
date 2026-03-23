@@ -129,11 +129,20 @@ public class TtsService : IDisposable
         if (_isPaused) return;
         _isPaused = true;
 
-        var oldCts = Interlocked.Exchange(ref _stopCts, new CancellationTokenSource());
-        oldCts.Cancel();
-        oldCts.Dispose();
-        try { _currentEdgeProc?.Kill(entireProcessTree: true); } catch { }
-        _player?.Stop();
+        // If NAudio is actively playing, pause it in place (resumes from same position).
+        // If edge-tts is still generating, kill it — the text will be re-queued by ProcessLoop.
+        var player = _player;
+        if (player != null && player.PlaybackState == PlaybackState.Playing)
+        {
+            player.Pause();
+        }
+        else
+        {
+            var oldCts = Interlocked.Exchange(ref _stopCts, new CancellationTokenSource());
+            oldCts.Cancel();
+            oldCts.Dispose();
+            try { _currentEdgeProc?.Kill(entireProcessTree: true); } catch { }
+        }
 
         PausedChanged?.Invoke(true);
     }
@@ -142,16 +151,21 @@ public class TtsService : IDisposable
     {
         if (!_isPaused) return;
         _isPaused = false;
+
+        // If the player is paused, resume it directly
+        var player = _player;
+        if (player != null && player.PlaybackState == PlaybackState.Paused)
+            player.Play();
+
         PausedChanged?.Invoke(false);
-        // ProcessLoop will pick up the queue on its next poll
+        // If player wasn't paused (edge-tts was killed), ProcessLoop picks up the re-queued text
     }
 
     // ── Stop ─────────────────────────────────────────────────────────────────
 
     /// <summary>
     /// Stops playback and clears the active session's queue only.
-    /// Then replays the last spoken message so you don't miss what was interrupted.
-    /// Use Pause to temporarily halt without losing your place in the queue.
+    /// Sets _lastText to the last queued item (the tail) so Replay plays the final part.
     /// </summary>
     public void StopCurrent()
     {
@@ -161,11 +175,23 @@ public class TtsService : IDisposable
         try { _currentEdgeProc?.Kill(entireProcessTree: true); } catch { }
         _player?.Stop();
 
-        // Clear the active session's queue only
+        // Read the last queued item's text before clearing, so Replay gets the final part
         lock (_queueLock)
         {
             if (_sessionQueues.TryGetValue(_activeSessionId, out var queue))
             {
+                // Grab text from the last item in the queue for Replay
+                if (queue.Last != null)
+                {
+                    try
+                    {
+                        var lastFile = queue.Last.Value;
+                        if (File.Exists(lastFile))
+                            _lastText = File.ReadAllText(lastFile).Trim();
+                    }
+                    catch { }
+                }
+
                 var node = queue.First;
                 while (node != null) { _fw.DeleteQueueFile(node.Value); node = node.Next; }
                 queue.Clear();
@@ -174,10 +200,6 @@ public class TtsService : IDisposable
 
         _isPaused = false;
         PausedChanged?.Invoke(false);
-
-        // Re-queue the last message so you can hear what was interrupted
-        if (!string.IsNullOrWhiteSpace(_lastText))
-            RequeueTextAtFront(_activeSessionId, _lastText);
     }
 
     // ── Queue management ──────────────────────────────────────────────────────
@@ -402,8 +424,14 @@ public class TtsService : IDisposable
                 wave.Init(reader);
                 wave.Play();
 
-                while (wave.PlaybackState == PlaybackState.Playing && !ct.IsCancellationRequested)
-                    await Task.Delay(100, ct).ConfigureAwait(false);
+                // Wait while playing OR paused — only exit on stop/cancel or natural end
+                while (!ct.IsCancellationRequested &&
+                       (wave.PlaybackState == PlaybackState.Playing ||
+                        wave.PlaybackState == PlaybackState.Paused))
+                {
+                    try { await Task.Delay(100, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                }
 
                 wave.Stop();
             }
@@ -462,21 +490,32 @@ public class TtsService : IDisposable
     // ── Replay last ───────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Replays the last spoken message, then continues with whatever was already queued.
-    /// Does NOT clear the queue — use Stop for a nuclear reset.
+    /// Stops current playback, clears the active session's queue, and replays only
+    /// the last spoken message. Nothing else plays after it.
     /// </summary>
     public void ReplayLast()
     {
         if (string.IsNullOrWhiteSpace(_lastText)) return;
 
-        // Cancel current playback without touching the queue
+        // Stop current playback
         var oldCts = Interlocked.Exchange(ref _stopCts, new CancellationTokenSource());
         oldCts.Cancel();
         oldCts.Dispose();
         try { _currentEdgeProc?.Kill(entireProcessTree: true); } catch { }
         _player?.Stop();
 
-        // Put last message at front — ProcessLoop will play it then continue with the queue
+        // Clear the active session's queue so nothing plays after the replay
+        lock (_queueLock)
+        {
+            if (_sessionQueues.TryGetValue(_activeSessionId, out var queue))
+            {
+                var node = queue.First;
+                while (node != null) { _fw.DeleteQueueFile(node.Value); node = node.Next; }
+                queue.Clear();
+            }
+        }
+
+        // Re-queue only the last message
         RequeueTextAtFront(_activeSessionId, _lastText);
 
         _isPaused = false;
