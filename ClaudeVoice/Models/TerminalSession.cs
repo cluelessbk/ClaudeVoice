@@ -25,6 +25,7 @@ public class TerminalSession : INotifyPropertyChanged
     public string TranscriptPath { get; set; } = "";
     public int?   ProcessId      { get; set; }        // claude.exe PID — null if discovered via transcript scan
     public IntPtr WindowHandle   { get; set; }        // HWND captured at link time for display name refresh
+    public bool   SessionIdIsPlaceholder { get; set; } // true when FindTranscriptPath failed → random hex ID
 
     public string DisplayName
     {

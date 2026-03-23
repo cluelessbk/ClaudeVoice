@@ -29,6 +29,7 @@ public class TtsService : IDisposable
     private string _lastText        = "";
     private string _activeSessionId = "";
     private volatile bool _isPaused = false;
+    private volatile bool _activeSessionIdIsPlaceholder = false;
     private int  _rate    = 0;
     private bool _enabled = true;
 
@@ -51,6 +52,8 @@ public class TtsService : IDisposable
     public event Action<bool>?         PausedChanged;
     // (sessionId, hasPending) — drives the 🔔 badge on terminal rows
     public event Action<string, bool>? SessionPendingChanged;
+    // (oldId, newId) — fired when a placeholder session ID is resolved to the real one
+    public event Action<string, string>? SessionIdResolved;
 
     public TtsService(FileWatcherService fw)
     {
@@ -84,10 +87,11 @@ public class TtsService : IDisposable
     /// item to front of its queue) and starts playing the new session's queue.
     /// Clicking the already-active session toggles pause/resume.
     /// </summary>
-    public void SetActiveSession(string sessionId, string transcriptPath, int? processId = null, IntPtr windowHandle = default)
+    public void SetActiveSession(string sessionId, string transcriptPath, int? processId = null, IntPtr windowHandle = default, bool isPlaceholder = false)
     {
-        _activeProcessId    = processId ?? 0;
-        _activeWindowHandle = windowHandle;
+        _activeProcessId              = processId ?? 0;
+        _activeWindowHandle           = windowHandle;
+        _activeSessionIdIsPlaceholder = isPlaceholder;
 
         if (sessionId == _activeSessionId)
         {
@@ -184,9 +188,36 @@ public class TtsService : IDisposable
         if (string.IsNullOrEmpty(sessionId)) sessionId = _activeSessionId;
 
         // Auto-adopt: if no active session is set, treat the first incoming session as active.
-        // This makes single-terminal usage work without requiring explicit linking or selection.
         if (string.IsNullOrEmpty(_activeSessionId) && !string.IsNullOrEmpty(sessionId))
+        {
             _activeSessionId = sessionId;
+            _activeSessionIdIsPlaceholder = false;
+        }
+
+        // Re-adopt: if the active session has a placeholder ID (FindTranscriptPath failed
+        // at link time), replace it with the real session ID from the audio queue filename.
+        // This resolves the mismatch that causes audio to be treated as pending (beep).
+        if (sessionId != _activeSessionId && _activeSessionIdIsPlaceholder)
+        {
+            var oldId = _activeSessionId;
+            _activeSessionId = sessionId;
+            _activeSessionIdIsPlaceholder = false;
+            SessionIdResolved?.Invoke(oldId, sessionId);
+        }
+
+        // Discard audio from unlinked sessions. Python hooks fire for ALL Claude sessions
+        // and write to audio_queue/ — we only want audio from sessions the user has linked.
+        // A session is "known" if it's the active one or already has a queue (was previously active).
+        bool known = sessionId == _activeSessionId;
+        if (!known)
+        {
+            lock (_queueLock) { known = _sessionQueues.ContainsKey(sessionId); }
+        }
+        if (!known)
+        {
+            _fw.DeleteQueueFile(filePath);
+            return;
+        }
 
         lock (_queueLock)
         {
@@ -407,6 +438,27 @@ public class TtsService : IDisposable
             return _sessionQueues.TryGetValue(sessionId, out var q) && q.Count > 0;
     }
 
+    /// <summary>
+    /// Removes queued audio for any session not in the live set.
+    /// Called when terminals are removed (closed) so their orphaned audio doesn't linger.
+    /// </summary>
+    public void RemoveSessionQueue(HashSet<string> liveSessionIds)
+    {
+        lock (_queueLock)
+        {
+            var dead = _sessionQueues.Keys.Where(id => !liveSessionIds.Contains(id)).ToList();
+            foreach (var id in dead)
+            {
+                if (_sessionQueues.TryGetValue(id, out var queue))
+                {
+                    foreach (var f in queue) _fw.DeleteQueueFile(f);
+                    queue.Clear();
+                }
+                _sessionQueues.Remove(id);
+            }
+        }
+    }
+
     // ── Replay last ───────────────────────────────────────────────────────────
 
     /// <summary>
@@ -463,7 +515,7 @@ public class TtsService : IDisposable
     private static string ComputeSessionId(string transcriptPath)
         => Convert.ToHexString(
             System.Security.Cryptography.MD5.HashData(
-                Encoding.UTF8.GetBytes(transcriptPath)))[..8].ToLowerInvariant();
+                Encoding.UTF8.GetBytes(transcriptPath.Replace('/', '\\'))))[..8].ToLowerInvariant();
 
     // ── Dispose ───────────────────────────────────────────────────────────────
 

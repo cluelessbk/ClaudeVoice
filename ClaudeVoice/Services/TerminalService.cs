@@ -55,19 +55,22 @@ public class TerminalService : IDisposable
         string transcriptPath = FindTranscriptPath((int)pid);
         string displayName    = GetDisplayName(hwnd, (int)pid);
 
-        // Session ID: derived from transcript if available, otherwise random (TTS routing deferred)
-        string sessionId = string.IsNullOrEmpty(transcriptPath)
+        // Session ID: derived from transcript if available, otherwise random placeholder.
+        // Placeholder IDs get resolved when the first audio arrives (TtsService re-adopts).
+        bool isPlaceholder = string.IsNullOrEmpty(transcriptPath);
+        string sessionId = isPlaceholder
             ? Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant()
             : ComputeSessionId(transcriptPath);
 
         // Must be called from UI thread — directly add to ObservableCollection
         Sessions.Add(new TerminalSession
         {
-            SessionId      = sessionId,
-            TranscriptPath = transcriptPath,
-            DisplayName    = displayName,
-            ProcessId      = (int)pid,
-            WindowHandle   = hwnd,
+            SessionId              = sessionId,
+            TranscriptPath         = transcriptPath,
+            DisplayName            = displayName,
+            ProcessId              = (int)pid,
+            WindowHandle           = hwnd,
+            SessionIdIsPlaceholder = isPlaceholder,
         });
         SessionsChanged?.Invoke();
     }
@@ -76,36 +79,22 @@ public class TerminalService : IDisposable
 
     /// <summary>
     /// Returns the best display name for a linked terminal.
-    /// Checks per-process hook files first (avoids cross-session contamination),
-    /// then falls back to the shared file, then the window title.
+    /// CWD-based first (gives project folder name), but skips CWDs already claimed
+    /// by another session (handles Windows Terminal shared PIDs). Falls back to window title.
     /// </summary>
     private string GetDisplayName(IntPtr hwnd, int terminalPid)
     {
-        // 1. Per-process files — correct even with multiple simultaneous sessions
+        // 1. Per-process hook files (CWD-based) — gives the project folder name
         var cwd = ReadCwdFromProcessTree(terminalPid);
         if (!string.IsNullOrEmpty(cwd))
         {
             var folderName = Path.GetFileName(cwd.TrimEnd('\\', '/'));
-            if (!string.IsNullOrEmpty(folderName)) return folderName;
+            // Skip if another session already uses this exact name (shared PID clash)
+            if (!string.IsNullOrEmpty(folderName) && !Sessions.Any(s => s.DisplayName == folderName))
+                return folderName;
         }
 
-        // 2. Shared fallback file (no staleness guard — folder name stays valid)
-        try
-        {
-            var sharedFile = Path.Combine(_claudeDir, "claudevoice_active.txt");
-            if (File.Exists(sharedFile))
-            {
-                var projectPath = File.ReadAllText(sharedFile).Trim();
-                if (!string.IsNullOrEmpty(projectPath))
-                {
-                    var folderName = Path.GetFileName(projectPath.TrimEnd('\\', '/'));
-                    if (!string.IsNullOrEmpty(folderName)) return folderName;
-                }
-            }
-        }
-        catch { }
-
-        // 3. Parse the window title
+        // 2. Window title (unique per window even with shared PIDs)
         var sb = new StringBuilder(512);
         GetWindowText(hwnd, sb, 512);
         return ExtractDisplayName(sb.ToString());
@@ -310,6 +299,13 @@ public class TerminalService : IDisposable
         var dead = new List<TerminalSession>();
         foreach (var s in Sessions)
         {
+            // HWND check: catches tab-closed-but-process-alive (Windows Terminal shares a PID)
+            if (s.WindowHandle != IntPtr.Zero && !IsWindow(s.WindowHandle))
+            {
+                dead.Add(s);
+                continue;
+            }
+
             if (s.ProcessId == null) continue;
             try
             {
@@ -337,9 +333,12 @@ public class TerminalService : IDisposable
 
     // Reused by TtsService and MainWindow for consistent session ID computation.
     // Must match the formula used when audio queue files are named.
+    // Python hook receives backslash paths from Claude Code, so normalise to
+    // backslashes before hashing — otherwise mixed-slash paths from Path.Combine
+    // produce a different MD5 and the session IDs won't match.
     public static string ComputeSessionId(string transcriptPath)
         => Convert.ToHexString(
-            MD5.HashData(Encoding.UTF8.GetBytes(transcriptPath)))[..8].ToLowerInvariant();
+            MD5.HashData(Encoding.UTF8.GetBytes(transcriptPath.Replace('/', '\\'))))[..8].ToLowerInvariant();
 
     public void Dispose()
     {
@@ -351,4 +350,5 @@ public class TerminalService : IDisposable
     // ── P/Invoke ──────────────────────────────────────────────────────────────
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("user32.dll")] private static extern int  GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hWnd);
 }

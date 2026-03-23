@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0 — 2026-03-23
+
+### Added
+- Foreground tracking: active session auto-switches when user focuses a linked terminal in the OS
+- Click-to-focus: clicking a session row in ClaudeVoice brings its terminal window to foreground
+- Placeholder session ID re-adopt: when FindTranscriptPath fails at link time, the real session ID is resolved on first audio arrival
+- Orphan cleanup: pending notifications and audio queues are cleaned up when a terminal is removed
+
+### Fixed
+- Session ID mismatch: normalized transcript paths to backslashes before MD5 hashing (Python hooks use backslashes, C# Path.Combine produced mixed slashes)
+- Closed terminals now detected via IsWindow(HWND) check — catches tab-closed-but-process-alive (Windows Terminal shared PID)
+- Audio from unlinked sessions silently discarded — no more phantom beeps from Claude sessions not linked in ClaudeVoice
+- Display name: CWD-based with dedup check, falls back to window title when name is already claimed
+
 ## 0.4.0 — 2026-03-22
 
 ### Added

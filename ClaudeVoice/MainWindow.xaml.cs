@@ -82,6 +82,18 @@ public partial class MainWindow : Window
                 UpdateCycleEnabled();
             });
 
+        // Placeholder session ID resolved to real one — update the terminal session model
+        _tts.SessionIdResolved += (oldId, newId) =>
+            Dispatcher.Invoke(() =>
+            {
+                var session = _terminals.Sessions.FirstOrDefault(s => s.SessionId == oldId);
+                if (session != null)
+                {
+                    session.SessionId = newId;
+                    session.SessionIdIsPlaceholder = false;
+                }
+            });
+
         _ttsEnabled = _fw.ReadTtsEnabled();
         _ttsRate    = _fw.ReadTtsRate();
         SyncTtsToggle(_ttsEnabled);
@@ -117,6 +129,12 @@ public partial class MainWindow : Window
         _fw.Start();
         _terminals.Start();
         TerminalsList.ItemsSource = _terminals.Sessions;
+
+        // Foreground tracking: when user focuses a linked terminal in the OS,
+        // auto-switch ClaudeVoice's active session to match.
+        _focusTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        _focusTimer.Tick += FocusTimer_Tick;
+        _focusTimer.Start();
 
         // Jabra SDK: register as softphone so the mic arm fires events directly.
         // Callbacks fire on an SDK thread — dispatch to UI thread for WaveIn safety.
@@ -154,6 +172,7 @@ public partial class MainWindow : Window
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         SavePosition();
+        _focusTimer?.Stop();
         _hotkeys?.Dispose();
         _jabra?.Dispose();
         _tts.Dispose();
@@ -222,6 +241,33 @@ public partial class MainWindow : Window
 
     // ── Terminals ─────────────────────────────────────────────────────────────
 
+    // Foreground tracking: auto-switch active session when user focuses a linked terminal.
+    private DispatcherTimer? _focusTimer;
+    private IntPtr _lastForegroundHwnd = IntPtr.Zero;
+
+    private void FocusTimer_Tick(object? sender, EventArgs e)
+    {
+        // Don't track during the link gesture
+        if (_linkTimer != null) return;
+
+        var fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero || fg == _lastForegroundHwnd) return;
+        _lastForegroundHwnd = fg;
+
+        // Check if the foreground window matches any linked terminal
+        var match = _terminals.Sessions.FirstOrDefault(s => s.WindowHandle == fg);
+        if (match == null || match.IsActive) return;
+
+        // Auto-switch to this terminal
+        foreach (var s in _terminals.Sessions)
+            s.IsActive = s.SessionId == match.SessionId;
+
+        _tts.SetActiveSession(match.SessionId, match.TranscriptPath, match.ProcessId, match.WindowHandle, match.SessionIdIsPlaceholder);
+        match.HasPending = false;
+        StopPendingNotification(match.SessionId);
+        UpdateCycleEnabled();
+    }
+
     // Link gesture: user clicks "Link terminal", then clicks their PowerShell window.
     // A DispatcherTimer polls GetForegroundWindow() every 200 ms. When focus moves to
     // a window that doesn't belong to ClaudeVoice, we capture it and call LinkTerminal.
@@ -273,7 +319,7 @@ public partial class MainWindow : Window
         if (justLinked != null && _terminals.Sessions.Count == 1)
         {
             justLinked.IsActive = true;
-            _tts.SetActiveSession(justLinked.SessionId, justLinked.TranscriptPath, justLinked.ProcessId, justLinked.WindowHandle);
+            _tts.SetActiveSession(justLinked.SessionId, justLinked.TranscriptPath, justLinked.ProcessId, justLinked.WindowHandle, justLinked.SessionIdIsPlaceholder);
         }
         if (justLinked != null)
         {
@@ -297,6 +343,7 @@ public partial class MainWindow : Window
 
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint   GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("user32.dll")] private static extern bool   SetForegroundWindow(IntPtr hWnd);
 
     private void TerminalRow_Click(object sender, MouseButtonEventArgs e)
     {
@@ -308,7 +355,11 @@ public partial class MainWindow : Window
 
             // Tell TtsService — switches the audio queue, writes active_session.txt,
             // and stores the processId so TerminalTypist targets the right window
-            _tts.SetActiveSession(session.SessionId, session.TranscriptPath, session.ProcessId, session.WindowHandle);
+            _tts.SetActiveSession(session.SessionId, session.TranscriptPath, session.ProcessId, session.WindowHandle, session.SessionIdIsPlaceholder);
+
+            // Bring the terminal window to the foreground
+            if (session.WindowHandle != IntPtr.Zero)
+                SetForegroundWindow(session.WindowHandle);
 
             session.HasPending = false;
             StopPendingNotification(session.SessionId);
@@ -320,8 +371,10 @@ public partial class MainWindow : Window
     {
         var activePath = _fw.ReadActiveSession();
         bool matched = false;
+        var liveIds = new HashSet<string>();
         foreach (var s in _terminals.Sessions)
         {
+            liveIds.Add(s.SessionId);
             s.IsActive = s.TranscriptPath == activePath;
             if (s.IsActive) matched = true;
 
@@ -331,12 +384,20 @@ public partial class MainWindow : Window
                 s.HasPending = true;
         }
 
+        // Stop beep notifications for sessions that were removed (terminal closed)
+        var orphaned = _pendingNotifyStart.Keys.Where(id => !liveIds.Contains(id)).ToList();
+        foreach (var id in orphaned)
+            StopPendingNotification(id);
+
+        // Also clear the removed session's audio queue in TtsService
+        _tts.RemoveSessionQueue(liveIds);
+
         // Auto-select the only terminal when nothing is marked active
         if (!matched && _terminals.Sessions.Count == 1)
         {
             var only = _terminals.Sessions[0];
             only.IsActive = true;
-            _tts.SetActiveSession(only.SessionId, only.TranscriptPath, only.ProcessId, only.WindowHandle);
+            _tts.SetActiveSession(only.SessionId, only.TranscriptPath, only.ProcessId, only.WindowHandle, only.SessionIdIsPlaceholder);
         }
 
         UpdateCycleEnabled();
@@ -358,7 +419,7 @@ public partial class MainWindow : Window
         foreach (var s in sessions)
             s.IsActive = s.SessionId == session.SessionId;
 
-        _tts.SetActiveSession(session.SessionId, session.TranscriptPath, session.ProcessId, session.WindowHandle);
+        _tts.SetActiveSession(session.SessionId, session.TranscriptPath, session.ProcessId, session.WindowHandle, session.SessionIdIsPlaceholder);
         session.HasPending = false;
         StopPendingNotification(session.SessionId);
         UpdateCycleEnabled();
@@ -382,7 +443,7 @@ public partial class MainWindow : Window
         foreach (var s in _terminals.Sessions)
             s.IsActive = s.SessionId == next.SessionId;
 
-        _tts.SetActiveSession(next.SessionId, next.TranscriptPath, next.ProcessId, next.WindowHandle);
+        _tts.SetActiveSession(next.SessionId, next.TranscriptPath, next.ProcessId, next.WindowHandle, next.SessionIdIsPlaceholder);
         next.HasPending = false;
         StopPendingNotification(next.SessionId);
         UpdateCycleEnabled();

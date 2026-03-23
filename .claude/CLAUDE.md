@@ -25,19 +25,6 @@ Two parts that communicate via files in `~/.claude/`:
 | UI layout | `MainWindow.xaml` + `MainWindow.xaml.cs` |
 | Styles | `App.xaml` |
 
-## Python hooks (in `~/.claude/`)
-
-| File | Trigger | Does |
-|---|---|---|
-| `tts_hook.py` | Stop hook | Writes Claude response to audio_queue |
-| `tts_pretool.py` | PreToolUse hook | Writes tool-use text to audio_queue |
-| `write_active.py` | PostToolUse hook | Writes per-process CWD to `claudevoice_active_{pid}.txt` |
-| `tts_utils.py` | Imported | Shared transcript parsing + markdown stripping |
-
-## Runtime state files (in `~/.claude/`)
-
-`audio_queue/`, `active_session.txt`, `claudevoice_active_{pid}.txt`, `tts_rate.txt`, `tts_last.txt`, `tts_disabled`, `claudevoice_pos.txt`
-
 ## Build
 
 ```bash
@@ -51,44 +38,34 @@ Launch: `D:/My Claude/TalkingPoint/publish/ClaudeVoice.exe`
 
 ## Roadmap
 
-Five phases to get ClaudeVoice fully working. Mark each `[x]` when complete.
+Phases 1–4 complete. Phase 5 in progress.
 
-### Phase 1: Fix TTS `[x]`
-Root cause: `_activeSessionId` was always empty — TTS only plays for the active session but no session was ever set active. Audio queue files piled up unconsumed.
-Fix: auto-adopt first incoming session ID in `TtsService.OnAudioFileArrived`; auto-activate first linked terminal in MainWindow. TTS now works without explicit linking for single-session use.
+### Phase 5: Terminal linking polish `[~]`
+- Foreground tracking: OS-focused terminal auto-becomes active session
+- Click session row → brings terminal window to foreground
+- Unlinked sessions' audio silently discarded (no phantom beeps)
 
-### Phase 2: Jabra Hang-Up → Enter `[x]`
-Play button was unsolvable (SDK consumes it with callActive=true, no event or HID). Used the **hang-up button** instead:
-- With `callActive=true`, pressing hang-up fires `CallActive→False` on the `ISingleCallControl` observable
-- On `CallActive→False`: call `StartCall()` to restore call mode (mic arm keeps working), wait 300ms for SDK to settle, then fire `HangUpPressed` event
-- MainWindow wires `HangUpPressed` → `TerminalTypist.SendEnter()` which focuses the terminal and sends Enter via PowerShell `SendKeys("{ENTER}")` (SendInput with VK_RETURN doesn't reach Windows Terminal)
+## Pending tests
 
-**What failed (Play button — kept for reference):**
-1. CallActive subscription — Play press produces no event with callActive=true
-2. Raw HID detection — Play button sends no HID with callActive=true
-3. Toggle EndCall→HID→RestoreCallMode — mic arm breaks after restore
-
-### Phase 3: Flow 1 — Active session end-to-end `[ ]`
-Mic down → speak → mic up (transcribes) → Enter or Play button → Claude answers → 5-sec delay → TTS reads response. Active session only, no beeps, no queue.
-
-### Phase 4: Flow 2 — Multi-session queue `[x]`
-- Non-active session gets Claude response → queued silently, not read
-- Beep notification: beeps in first 10 sec of each minute, silent 50 sec, repeats for 5 min, then stops
-- Hang-up button → priority: submit transcription > cycle to oldest pending session > send Enter (fallback)
-- Session stays pending silently if user never switches
-- Bug fix: second terminal can now be linked (HWND-based dedup instead of PID — Windows Terminal shares a PID)
-- Audio queue cleanup on app startup/shutdown prevents stale files from old sessions
-
-### Phase 5: Terminal linking polish `[ ]`
-- "Link terminal" button → user clicks PowerShell window → app captures that window → shows in list
-- Terminal auto-removes from list when its process exits
-- Switch hotkey cycles all linked terminals in link order (not arrival order)
-- Hang-up button cycles only terminals with pending messages (arrival order)
+- [ ] Display name — second terminal shows wrong name (shared PID). CWD-first with dedup added but untested
+- [ ] Foreground tracking — auto-switch when focusing a linked terminal
+- [ ] Click session row → focus terminal window
+- [ ] Unlinked session audio silently discarded
+- [ ] Multi-session end-to-end: two terminals, correct names, voice/bell routing
+- [ ] Beep schedule — 10s beep / 50s silent per minute, 5 min total
+- [ ] Beep cleanup — stops when pending session is closed or switched to
+- [ ] Hang-up cycling — submit transcription > cycle to pending > send Enter
+- [ ] Ctrl+Alt+Arrow — switch between linked terminals
 
 ## Known issues
 
-1. ~~TTS not playing~~ — FIXED (Phase 1)
-2. ~~Headset button doesn't send Enter~~ — FIXED (Phase 2, using hang-up button)
-3. HotkeyService has HidButtonPressed event + 0x0080 detection — unused now, could remove or keep for non-Jabra headsets
-4. Closed terminals remain in session list (→ Phase 5)
-5. Phase 4 pending testing — beep schedule, hang-up cycling, and multi-terminal linking need end-to-end verification
+1. HotkeyService HidButtonPressed + 0x0080 detection — unused, could remove or keep for non-Jabra headsets
+2. Stale `claudevoice_active_{pid}.txt` files accumulate in `~/.claude/` — never cleaned up
+
+## Design decisions
+
+- Jabra Play button unsolvable (SDK consumes it with callActive=true). Hang-up button used instead.
+- SendKeys("{ENTER}") via PowerShell — SendInput with VK_RETURN doesn't reach Windows Terminal.
+- HWND-based dedup for terminal linking — Windows Terminal shares a PID across windows.
+- Session IDs: MD5 of transcript path normalized to backslashes before hashing.
+- Audio from unlinked sessions discarded in OnAudioFileArrived.
