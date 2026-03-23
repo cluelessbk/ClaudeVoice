@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.1 — 2026-03-23
+
+### Verified
+- Foreground tracking: auto-switch when focusing a linked terminal
+- Click session row: brings terminal window to foreground
+- Ctrl+Alt+Arrow: switch between linked terminals
+- Display name: shows tab title (CWD-based fallback exists but tab title is acceptable)
+
+### Discovered
+- Inactive session audio silently discarded: TTS only tracks the active session ID, so a second linked-but-never-activated terminal's audio gets deleted instead of queued. Needs `RegisterSession()` in TtsService.
+
 ## 0.6.0 — 2026-03-23
 
 ### Added

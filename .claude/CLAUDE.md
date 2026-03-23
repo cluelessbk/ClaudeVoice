@@ -47,20 +47,17 @@ Phases 1–4 complete. Phase 5 in progress.
 
 ## Pending tests
 
-- [ ] Display name — second terminal shows wrong name (shared PID). CWD-first with dedup added but untested
-- [ ] Foreground tracking — auto-switch when focusing a linked terminal
-- [ ] Click session row → focus terminal window
-- [ ] Unlinked session audio silently discarded
 - [ ] Multi-session end-to-end: two terminals, correct names, voice/bell routing
 - [ ] Beep schedule — 10s beep / 50s silent per minute, 5 min total
 - [ ] Beep cleanup — stops when pending session is closed or switched to
 - [ ] Hang-up cycling — submit transcription > cycle to pending > send Enter
-- [ ] Ctrl+Alt+Arrow — switch between linked terminals
 
 ## Known issues
 
-1. HotkeyService HidButtonPressed + 0x0080 detection — unused, could remove or keep for non-Jabra headsets
-2. Stale `claudevoice_active_{pid}.txt` files accumulate in `~/.claude/` — never cleaned up
+1. **Inactive session audio discarded** — TTS only knows about the active session ID; audio arriving for a second linked-but-never-activated terminal is silently deleted in `OnAudioFileArrived`. Fix: add `RegisterSession()` to TtsService so linked sessions are known before they become active.
+2. Display name uses window tab title, not project folder name — CWD-based naming exists but often falls back to tab title. Works well enough.
+3. HotkeyService HidButtonPressed + 0x0080 detection — unused, could remove or keep for non-Jabra headsets
+4. Stale `claudevoice_active_{pid}.txt` files accumulate in `~/.claude/` — never cleaned up
 
 ## Design decisions
 
@@ -68,4 +65,4 @@ Phases 1–4 complete. Phase 5 in progress.
 - SendKeys("{ENTER}") via PowerShell — SendInput with VK_RETURN doesn't reach Windows Terminal.
 - HWND-based dedup for terminal linking — Windows Terminal shares a PID across windows.
 - Session IDs: MD5 of transcript path normalized to backslashes before hashing.
-- Audio from unlinked sessions discarded in OnAudioFileArrived.
+- Audio from unlinked sessions discarded in OnAudioFileArrived — but second linked session also gets discarded (bug, see known issues #1).
