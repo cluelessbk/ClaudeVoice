@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Controls;
 using System.Windows.Threading;
 using ClaudeVoice.Models;
 using ClaudeVoice.Services;
@@ -50,6 +51,7 @@ public partial class MainWindow : Window
         _stt.Transcribed  += text =>
         {
             var hwnd = _tts.ActiveWindowHandle;
+            if (hwnd == IntPtr.Zero) return;  // no linked terminal — discard transcription
             Task.Run(() =>
             {
                 TerminalTypist.FocusAndType(text, hwnd);
@@ -352,6 +354,39 @@ public partial class MainWindow : Window
             StopPendingNotification(session.SessionId);
             UpdateCycleEnabled();
         }
+    }
+
+    // ── Inline rename ─────────────────────────────────────────────────────
+
+    private void DisplayName_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount < 2) return;
+        if (sender is TextBlock tb && tb.Parent is Grid grid && grid.Children.Count > 1
+            && grid.Children[1] is TextBox box)
+        {
+            tb.Visibility  = Visibility.Collapsed;
+            box.Visibility = Visibility.Visible;
+            box.Focus();
+            box.SelectAll();
+        }
+        e.Handled = true;
+    }
+
+    private void DisplayNameEdit_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter || e.Key == Key.Escape)
+            FinishRename(sender as TextBox);
+    }
+
+    private void DisplayNameEdit_LostFocus(object sender, RoutedEventArgs e)
+        => FinishRename(sender as TextBox);
+
+    private void FinishRename(TextBox? box)
+    {
+        if (box == null) return;
+        box.Visibility = Visibility.Collapsed;
+        if (box.Parent is Grid grid && grid.Children[0] is TextBlock tb)
+            tb.Visibility = Visibility.Visible;
     }
 
     private void UpdateActiveSession()

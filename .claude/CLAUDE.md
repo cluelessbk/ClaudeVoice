@@ -7,12 +7,12 @@ All source code lives in this directory. Do not create files outside of it (exce
 ## Architecture
 
 Two parts that communicate via badge-numbered files in `~/.claude/`:
-1. **Python hooks** — fire inside Claude Code on Stop/PreToolUse/PostToolUse, read their badge from `claudevoice_badge_{pid}.txt`, write text to `~/.claude/audio_queue/b{N}_{timestamp}.txt`
+1. **Python hooks** — fire inside Claude Code on Stop/PreToolUse, read their badge from `claudevoice_badge_{pid}.txt`, write text to `~/.claude/audio_queue/b{N}_{timestamp}.txt`
 2. **ClaudeVoice.exe** — watches `audio_queue/`, routes audio by badge number, speaks via edge-tts, records mic via NAudio, transcribes via Whisper.net, types into the Claude terminal
 
 ### Badge-based session routing
 
-Each linked terminal gets a stable badge number (1, 2, 3…) at link time. TerminalService writes `claudevoice_badge_{pid}.txt` for all descendant PIDs every 3 seconds. Python hooks read the badge and include it in audio filenames. This replaces the old transcript-path-based session ID which broke every time a new conversation started.
+Each linked terminal gets a stable badge number (1, 2, 3…) at link time. TerminalService writes `claudevoice_badge_{pid}.txt` for all descendant PIDs every 3 seconds. Python hooks walk up the process tree (via Windows `CreateToolhelp32Snapshot`) to find the nearest ancestor with a badge file, since the direct PPID is often an ephemeral bash process. This replaces the old transcript-path-based session ID which broke every time a new conversation started.
 
 ## File map
 
@@ -49,9 +49,9 @@ Launch: `D:/My Claude/TalkingPoint/publish/ClaudeVoice.exe`
 
 ## Known issues
 
-1. Display name uses window tab title, not project folder name — CWD-based naming exists but often falls back to tab title. Works well enough.
+1. Display name defaults to window tab title — user can double-click to rename in-app
 2. HotkeyService HidButtonPressed + 0x0080 detection — unused, could remove or keep for non-Jabra headsets
-3. Stale `claudevoice_active_{pid}.txt` files accumulate in `~/.claude/` — never cleaned up
+3. Stale `claudevoice_badge_{pid}.txt` files may remain if app crashes (cleaned on next normal launch)
 
 ## Design decisions
 

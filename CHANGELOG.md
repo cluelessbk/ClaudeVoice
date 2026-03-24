@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.0 — 2026-03-25
+
+### Fixed
+- **TTS not working** — Python hooks now walk up the process tree to find badge files, instead of relying on direct PPID which was always an ephemeral bash process
+- **STT worked without linked terminal** — transcription was falling back to any Claude window; now requires a linked terminal
+- **Stale file accumulation** — removed `write_active.py` PostToolUse hook that created hundreds of orphaned `claudevoice_active_{pid}.txt` files; Stop hook now cleans up its own active file on session end
+
+### Added
+- **Inline terminal rename** — double-click the display name in the terminal list to rename it
+
+### Removed
+- `write_active.py` PostToolUse hook — badge system handles routing, display name uses window title + manual rename
+
 ## 0.8.0 — 2026-03-24
 
 ### Removed

@@ -149,9 +149,19 @@
                   <TextBlock Text="{Binding Badge}" Foreground="{StaticResource AccentBrush}"
                              FontSize="11" FontWeight="Bold" VerticalAlignment="Center"
                              Margin="0,0,6,0" MinWidth="10"/>
-                  <TextBlock Text="{Binding DisplayName}"
-                             Foreground="{StaticResource TextBrush}"
-                             FontSize="12" VerticalAlignment="Center"/>
+                  <Grid VerticalAlignment="Center">
+                    <TextBlock Text="{Binding DisplayName}"
+                               Foreground="{StaticResource TextBrush}"
+                               FontSize="12"
+                               MouseLeftButtonDown="DisplayName_DoubleClick"/>
+                    <TextBox Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}"
+                             FontSize="12" Visibility="Collapsed"
+                             Background="#1a1a2e" Foreground="{StaticResource TextBrush}"
+                             BorderBrush="{StaticResource AccentBrush}" BorderThickness="1"
+                             Padding="2,0" MinWidth="80"
+                             KeyDown="DisplayNameEdit_KeyDown"
+                             LostFocus="DisplayNameEdit_LostFocus"/>
+                  </Grid>
                 </StackPanel>
               </Border>
             </DataTemplate>
