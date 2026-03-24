@@ -297,6 +297,8 @@ public class TerminalService : IDisposable
         if (_disposed) return;
 
         var dead = new List<TerminalSession>();
+        var refreshed = new List<(TerminalSession session, string newPath, string newId)>();
+
         foreach (var s in Sessions)
         {
             // HWND check: catches tab-closed-but-process-alive (Windows Terminal shares a PID)
@@ -310,21 +312,33 @@ public class TerminalService : IDisposable
             try
             {
                 var proc = Process.GetProcessById(s.ProcessId.Value);
-                if (proc.HasExited) dead.Add(s);
+                if (proc.HasExited) { dead.Add(s); proc.Dispose(); continue; }
                 proc.Dispose();
             }
             catch
             {
-                dead.Add(s); // GetProcessById throws if process not found = already dead
+                dead.Add(s);
+                continue;
             }
+
+            // Re-resolve transcript path — catches new conversations that create a new .jsonl
+            var newPath = FindTranscriptPath(s.ProcessId.Value);
+            if (!string.IsNullOrEmpty(newPath) && newPath != s.TranscriptPath)
+                refreshed.Add((s, newPath, ComputeSessionId(newPath)));
         }
 
-        if (dead.Count == 0) return;
+        if (dead.Count == 0 && refreshed.Count == 0) return;
 
         App.Current.Dispatcher.Invoke(() =>
         {
             if (_disposed) return;
             foreach (var s in dead) Sessions.Remove(s);
+            foreach (var (session, newPath, newId) in refreshed)
+            {
+                session.TranscriptPath = newPath;
+                session.SessionId = newId;
+                session.SessionIdIsPlaceholder = false;
+            }
             SessionsChanged?.Invoke();
         });
     }

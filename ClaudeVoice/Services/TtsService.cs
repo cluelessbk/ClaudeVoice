@@ -130,19 +130,11 @@ public class TtsService : IDisposable
         _isPaused = true;
 
         // If NAudio is actively playing, pause it in place (resumes from same position).
-        // If edge-tts is still generating, kill it — the text will be re-queued by ProcessLoop.
+        // If edge-tts is still generating, just set the flag — SpeakText checks _isPaused
+        // before starting playback so it will pause without needing to regenerate.
         var player = _player;
         if (player != null && player.PlaybackState == PlaybackState.Playing)
-        {
             player.Pause();
-        }
-        else
-        {
-            var oldCts = Interlocked.Exchange(ref _stopCts, new CancellationTokenSource());
-            oldCts.Cancel();
-            oldCts.Dispose();
-            try { _currentEdgeProc?.Kill(entireProcessTree: true); } catch { }
-        }
 
         PausedChanged?.Invoke(true);
     }
@@ -158,7 +150,8 @@ public class TtsService : IDisposable
             player.Play();
 
         PausedChanged?.Invoke(false);
-        // If player wasn't paused (edge-tts was killed), ProcessLoop picks up the re-queued text
+        // If edge-tts was generating when paused, SpeakText will start playback
+        // once generation finishes (it checks _isPaused before playing).
     }
 
     // ── Stop ─────────────────────────────────────────────────────────────────
@@ -302,6 +295,8 @@ public class TtsService : IDisposable
 
     // ── Process loop ──────────────────────────────────────────────────────────
 
+    private int _pollCounter = 0;
+
     private async Task ProcessLoop(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -329,9 +324,43 @@ public class TtsService : IDisposable
             }
             else
             {
+                // Fallback polling: every ~2s (10 × 200ms), scan the queue directory
+                // for files the FileSystemWatcher may have missed (buffer overflow, timing, etc.)
+                if (++_pollCounter >= 10)
+                {
+                    _pollCounter = 0;
+                    PollQueueDirectory();
+                }
+
                 try { await Task.Delay(200, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { break; }
             }
+        }
+    }
+
+    /// <summary>
+    /// Scans the queue directory for .txt files that aren't already in any session queue.
+    /// Re-feeds them through OnAudioFileArrived so they get properly queued and played.
+    /// </summary>
+    private void PollQueueDirectory()
+    {
+        var filesOnDisk = _fw.GetQueueFiles();
+        if (filesOnDisk.Length == 0) return;
+
+        // Build set of all file paths currently in session queues
+        HashSet<string> knownFiles;
+        lock (_queueLock)
+        {
+            knownFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var queue in _sessionQueues.Values)
+                foreach (var f in queue)
+                    knownFiles.Add(f);
+        }
+
+        foreach (var f in filesOnDisk)
+        {
+            if (!knownFiles.Contains(f))
+                OnAudioFileArrived(f);
         }
     }
 
@@ -415,6 +444,15 @@ public class TtsService : IDisposable
                     return;
                 }
 
+                if (ct.IsCancellationRequested) return;
+
+                // If paused during edge-tts generation, wait here until resumed
+                // instead of killing the process and regenerating.
+                while (_isPaused && !ct.IsCancellationRequested)
+                {
+                    try { await Task.Delay(100, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                }
                 if (ct.IsCancellationRequested) return;
 
                 PlayingChanged?.Invoke(true);
