@@ -86,18 +86,6 @@ public partial class MainWindow : Window
                 UpdateCycleEnabled();
             });
 
-        // Placeholder session ID resolved to real one — update the terminal session model
-        _tts.SessionIdResolved += (oldId, newId) =>
-            Dispatcher.Invoke(() =>
-            {
-                var session = _terminals.Sessions.FirstOrDefault(s => s.SessionId == oldId);
-                if (session != null)
-                {
-                    session.SessionId = newId;
-                    session.SessionIdIsPlaceholder = false;
-                }
-            });
-
         _ttsEnabled = _fw.ReadTtsEnabled();
         _ttsRate    = _fw.ReadTtsRate();
         SyncTtsToggle(_ttsEnabled);
@@ -266,7 +254,7 @@ public partial class MainWindow : Window
         foreach (var s in _terminals.Sessions)
             s.IsActive = s.SessionId == match.SessionId;
 
-        _tts.SetActiveSession(match.SessionId, match.TranscriptPath, match.ProcessId, match.WindowHandle, match.SessionIdIsPlaceholder);
+        _tts.SetActiveSession(match.SessionId, match.ProcessId, match.WindowHandle);
         match.HasPending = false;
         StopPendingNotification(match.SessionId);
         UpdateCycleEnabled();
@@ -323,7 +311,7 @@ public partial class MainWindow : Window
         if (justLinked != null && _terminals.Sessions.Count == 1)
         {
             justLinked.IsActive = true;
-            _tts.SetActiveSession(justLinked.SessionId, justLinked.TranscriptPath, justLinked.ProcessId, justLinked.WindowHandle, justLinked.SessionIdIsPlaceholder);
+            _tts.SetActiveSession(justLinked.SessionId, justLinked.ProcessId, justLinked.WindowHandle);
         }
         if (justLinked != null)
         {
@@ -359,7 +347,7 @@ public partial class MainWindow : Window
 
             // Tell TtsService — switches the audio queue, writes active_session.txt,
             // and stores the processId so TerminalTypist targets the right window
-            _tts.SetActiveSession(session.SessionId, session.TranscriptPath, session.ProcessId, session.WindowHandle, session.SessionIdIsPlaceholder);
+            _tts.SetActiveSession(session.SessionId, session.ProcessId, session.WindowHandle);
 
             // Bring the terminal window to the foreground
             if (session.WindowHandle != IntPtr.Zero)
@@ -373,35 +361,32 @@ public partial class MainWindow : Window
 
     private void UpdateActiveSession()
     {
-        var activePath = _fw.ReadActiveSession();
+        var activeBadge = _tts.ActiveSessionId;
         bool matched = false;
-        var liveIds = new HashSet<string>();
+        var liveBadges = new HashSet<string>();
         foreach (var s in _terminals.Sessions)
         {
-            liveIds.Add(s.SessionId);
-            s.IsActive = s.TranscriptPath == activePath;
+            liveBadges.Add(s.SessionId);
+            s.IsActive = s.SessionId == activeBadge;
             if (s.IsActive) matched = true;
 
-            // Audio for this session may have arrived before TerminalService scanned it.
-            // Restore the badge now that the session is in the list.
             if (!s.IsActive && _tts.HasQueuedItems(s.SessionId))
                 s.HasPending = true;
         }
 
         // Stop beep notifications for sessions that were removed (terminal closed)
-        var orphaned = _pendingNotifyStart.Keys.Where(id => !liveIds.Contains(id)).ToList();
+        var orphaned = _pendingNotifyStart.Keys.Where(id => !liveBadges.Contains(id)).ToList();
         foreach (var id in orphaned)
             StopPendingNotification(id);
 
-        // Also clear the removed session's audio queue in TtsService
-        _tts.RemoveSessionQueue(liveIds);
+        _tts.RemoveSessionQueue(liveBadges);
 
         // Auto-select the only terminal when nothing is marked active
         if (!matched && _terminals.Sessions.Count == 1)
         {
             var only = _terminals.Sessions[0];
             only.IsActive = true;
-            _tts.SetActiveSession(only.SessionId, only.TranscriptPath, only.ProcessId, only.WindowHandle, only.SessionIdIsPlaceholder);
+            _tts.SetActiveSession(only.SessionId, only.ProcessId, only.WindowHandle);
         }
 
         UpdateCycleEnabled();
@@ -423,7 +408,7 @@ public partial class MainWindow : Window
         foreach (var s in sessions)
             s.IsActive = s.SessionId == session.SessionId;
 
-        _tts.SetActiveSession(session.SessionId, session.TranscriptPath, session.ProcessId, session.WindowHandle, session.SessionIdIsPlaceholder);
+        _tts.SetActiveSession(session.SessionId, session.ProcessId, session.WindowHandle);
         session.HasPending = false;
         StopPendingNotification(session.SessionId);
         UpdateCycleEnabled();
@@ -447,7 +432,7 @@ public partial class MainWindow : Window
         foreach (var s in _terminals.Sessions)
             s.IsActive = s.SessionId == next.SessionId;
 
-        _tts.SetActiveSession(next.SessionId, next.TranscriptPath, next.ProcessId, next.WindowHandle, next.SessionIdIsPlaceholder);
+        _tts.SetActiveSession(next.SessionId, next.ProcessId, next.WindowHandle);
         next.HasPending = false;
         StopPendingNotification(next.SessionId);
         UpdateCycleEnabled();

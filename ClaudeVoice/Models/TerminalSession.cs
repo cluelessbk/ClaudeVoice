@@ -22,10 +22,10 @@ public class TerminalSession : INotifyPropertyChanged
     private string _displayName = "";
 
     public string SessionId      { get; set; } = "";
+    public int    Badge          { get; set; }         // stable number assigned at link time (1, 2, 3…)
     public string TranscriptPath { get; set; } = "";
-    public int?   ProcessId      { get; set; }        // claude.exe PID — null if discovered via transcript scan
+    public int?   ProcessId      { get; set; }        // terminal PID — null if discovered via transcript scan
     public IntPtr WindowHandle   { get; set; }        // HWND captured at link time for display name refresh
-    public bool   SessionIdIsPlaceholder { get; set; } // true when FindTranscriptPath failed → random hex ID
 
     public string DisplayName
     {

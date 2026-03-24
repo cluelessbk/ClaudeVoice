@@ -2,7 +2,6 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeVoice.Models;
@@ -13,6 +12,8 @@ namespace ClaudeVoice.Services;
 /// Manages manually linked terminal sessions. Sessions are added by the user
 /// clicking "Link terminal" and then clicking the target PowerShell window.
 /// Sessions are automatically removed when their process exits.
+/// Badge files (claudevoice_badge_{pid}.txt) are written for all descendant
+/// PIDs so Python hooks can identify which terminal they belong to.
 /// </summary>
 public class TerminalService : IDisposable
 {
@@ -20,6 +21,7 @@ public class TerminalService : IDisposable
     private readonly string _projectsDir;
     private readonly System.Timers.Timer _monitorTimer;
     private volatile bool _disposed;
+    private int _nextBadge = 1;
 
     public ObservableCollection<TerminalSession> Sessions { get; } = new();
     public event Action? SessionsChanged;
@@ -30,7 +32,7 @@ public class TerminalService : IDisposable
         _projectsDir = Path.Combine(_claudeDir, "projects");
 
         _monitorTimer = new System.Timers.Timer(3000);
-        _monitorTimer.Elapsed += (_, _) => CheckDeadSessions();
+        _monitorTimer.Elapsed += (_, _) => MonitorTick();
         _monitorTimer.AutoReset = true;
     }
 
@@ -39,8 +41,7 @@ public class TerminalService : IDisposable
 
     /// <summary>
     /// Called from the UI thread when the user clicks a terminal window during the link flow.
-    /// Captures the ProcessId from the HWND, reads the project path from the hook-written file,
-    /// and adds a new session to the list.
+    /// Captures the ProcessId from the HWND, assigns a badge, and adds a new session.
     /// </summary>
     public void LinkTerminal(IntPtr hwnd)
     {
@@ -50,28 +51,23 @@ public class TerminalService : IDisposable
         // shares a single PID across all its windows, so PID check blocks the second link)
         if (Sessions.Any(s => s.WindowHandle == hwnd)) return;
 
-        // Walk the terminal's process tree to find the right per-process hook file.
-        // This prevents cross-contamination when multiple Claude sessions are running.
-        string transcriptPath = FindTranscriptPath((int)pid);
-        string displayName    = GetDisplayName(hwnd, (int)pid);
-
-        // Session ID: derived from transcript if available, otherwise random placeholder.
-        // Placeholder IDs get resolved when the first audio arrives (TtsService re-adopts).
-        bool isPlaceholder = string.IsNullOrEmpty(transcriptPath);
-        string sessionId = isPlaceholder
-            ? Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant()
-            : ComputeSessionId(transcriptPath);
+        int badge          = _nextBadge++;
+        string sessionId   = badge.ToString();
+        string displayName = GetDisplayName(hwnd, (int)pid);
 
         // Must be called from UI thread — directly add to ObservableCollection
         Sessions.Add(new TerminalSession
         {
-            SessionId              = sessionId,
-            TranscriptPath         = transcriptPath,
-            DisplayName            = displayName,
-            ProcessId              = (int)pid,
-            WindowHandle           = hwnd,
-            SessionIdIsPlaceholder = isPlaceholder,
+            SessionId    = sessionId,
+            Badge        = badge,
+            DisplayName  = displayName,
+            ProcessId    = (int)pid,
+            WindowHandle = hwnd,
         });
+
+        // Write badge files immediately so hooks can start routing audio
+        WriteBadgeFilesForSession(Sessions.Last());
+
         SessionsChanged?.Invoke();
     }
 
@@ -100,35 +96,7 @@ public class TerminalService : IDisposable
         return ExtractDisplayName(sb.ToString());
     }
 
-    // ── Transcript path ───────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Finds the transcript path for the Claude session running inside the given terminal.
-    /// Walks the terminal's process tree and checks per-process hook files written by
-    /// write_active.py (claudevoice_active_{pid}.txt). Falls back to the shared file.
-    /// </summary>
-    private string FindTranscriptPath(int terminalPid)
-    {
-        // 1. Per-process files — immune to cross-session overwriting
-        var cwd = ReadCwdFromProcessTree(terminalPid);
-        if (!string.IsNullOrEmpty(cwd))
-        {
-            var transcript = FindTranscriptForCwd(cwd);
-            if (!string.IsNullOrEmpty(transcript)) return transcript;
-        }
-
-        // 2. Shared fallback with staleness guard (only trust if written recently)
-        try
-        {
-            var sharedFile = Path.Combine(_claudeDir, "claudevoice_active.txt");
-            if (!File.Exists(sharedFile)) return "";
-            if ((DateTime.Now - File.GetLastWriteTime(sharedFile)).TotalMinutes > 5) return "";
-
-            var projectPath = File.ReadAllText(sharedFile).Trim();
-            return FindTranscriptForCwd(projectPath);
-        }
-        catch { return ""; }
-    }
+    // ── Process tree ──────────────────────────────────────────────────────────
 
     /// <summary>
     /// Walks the process tree rooted at terminalPid and reads the CWD from the first
@@ -152,33 +120,6 @@ public class TerminalService : IDisposable
         catch { }
         return "";
     }
-
-    /// <summary>
-    /// Given a project CWD path, finds the most recently modified .jsonl transcript
-    /// in the corresponding ~/.claude/projects/ directory.
-    /// </summary>
-    private string FindTranscriptForCwd(string projectPath)
-    {
-        if (string.IsNullOrEmpty(projectPath)) return "";
-        try
-        {
-            var encoded    = EncodeProjectPath(projectPath);
-            var projectDir = Path.Combine(_projectsDir, encoded);
-
-            if (!Directory.Exists(projectDir))
-                projectDir = FindMatchingProjectDir(projectPath) ?? "";
-
-            if (string.IsNullOrEmpty(projectDir) || !Directory.Exists(projectDir)) return "";
-
-            var jsonls = Directory.GetFiles(projectDir, "*.jsonl")
-                                  .OrderByDescending(File.GetLastWriteTime)
-                                  .ToArray();
-            return jsonls.Length > 0 ? jsonls[0] : "";
-        }
-        catch { return ""; }
-    }
-
-    // ── Process tree ──────────────────────────────────────────────────────────
 
     /// <summary>
     /// Returns all process IDs that are descendants of rootPid (BFS via WMI parent map).
@@ -290,14 +231,13 @@ public class TerminalService : IDisposable
         return windowTitle.Length > 35 ? windowTitle[..35] + "…" : windowTitle;
     }
 
-    // ── Dead session monitor ──────────────────────────────────────────────────
+    // ── Monitor tick (dead sessions + badge refresh) ─────────────────────────
 
-    private void CheckDeadSessions()
+    private void MonitorTick()
     {
         if (_disposed) return;
 
         var dead = new List<TerminalSession>();
-        var refreshed = new List<(TerminalSession session, string newPath, string newId)>();
 
         foreach (var s in Sessions)
         {
@@ -318,47 +258,76 @@ public class TerminalService : IDisposable
             catch
             {
                 dead.Add(s);
-                continue;
             }
-
-            // Re-resolve transcript path — catches new conversations that create a new .jsonl
-            var newPath = FindTranscriptPath(s.ProcessId.Value);
-            if (!string.IsNullOrEmpty(newPath) && newPath != s.TranscriptPath)
-                refreshed.Add((s, newPath, ComputeSessionId(newPath)));
         }
 
-        if (dead.Count == 0 && refreshed.Count == 0) return;
+        // Refresh badge files for all live sessions (handles PID changes from
+        // Claude Code restarts, new child processes, etc.)
+        RefreshBadgeFiles(dead);
+
+        if (dead.Count == 0) return;
 
         App.Current.Dispatcher.Invoke(() =>
         {
             if (_disposed) return;
             foreach (var s in dead) Sessions.Remove(s);
-            foreach (var (session, newPath, newId) in refreshed)
-            {
-                session.TranscriptPath = newPath;
-                session.SessionId = newId;
-                session.SessionIdIsPlaceholder = false;
-            }
             SessionsChanged?.Invoke();
         });
     }
 
-    // ── Public helpers ────────────────────────────────────────────────────────
+    // ── Badge file management ────────────────────────────────────────────────
 
-    // Reused by TtsService and MainWindow for consistent session ID computation.
-    // Must match the formula used when audio queue files are named.
-    // Python hook receives backslash paths from Claude Code, so normalise to
-    // backslashes before hashing — otherwise mixed-slash paths from Path.Combine
-    // produce a different MD5 and the session IDs won't match.
-    public static string ComputeSessionId(string transcriptPath)
-        => Convert.ToHexString(
-            MD5.HashData(Encoding.UTF8.GetBytes(transcriptPath.Replace('/', '\\'))))[..8].ToLowerInvariant();
+    /// <summary>
+    /// Writes claudevoice_badge_{pid}.txt for all descendant PIDs of a session.
+    /// Called at link time for immediate availability.
+    /// </summary>
+    private void WriteBadgeFilesForSession(TerminalSession session)
+    {
+        if (session.ProcessId == null || session.ProcessId <= 0) return;
+        var badge = session.Badge.ToString();
+        foreach (var pid in GetDescendantPids(session.ProcessId.Value))
+        {
+            try { File.WriteAllText(Path.Combine(_claudeDir, $"claudevoice_badge_{pid}.txt"), badge); }
+            catch { }
+        }
+    }
+
+    /// <summary>
+    /// Clears all badge files then rewrites them for live sessions.
+    /// Runs every 3s on the monitor timer thread.
+    /// </summary>
+    private void RefreshBadgeFiles(List<TerminalSession> deadSessions)
+    {
+        try
+        {
+            // Clear all existing badge files
+            foreach (var f in Directory.GetFiles(_claudeDir, "claudevoice_badge_*.txt"))
+                try { File.Delete(f); } catch { }
+        }
+        catch { }
+
+        // Write fresh badge files for all live sessions
+        var deadSet = new HashSet<TerminalSession>(deadSessions);
+        foreach (var s in Sessions)
+        {
+            if (deadSet.Contains(s)) continue;
+            WriteBadgeFilesForSession(s);
+        }
+    }
 
     public void Dispose()
     {
         _disposed = true;
         _monitorTimer.Stop();
         _monitorTimer.Dispose();
+
+        // Clean up badge files on shutdown
+        try
+        {
+            foreach (var f in Directory.GetFiles(_claudeDir, "claudevoice_badge_*.txt"))
+                try { File.Delete(f); } catch { }
+        }
+        catch { }
     }
 
     // ── P/Invoke ──────────────────────────────────────────────────────────────
