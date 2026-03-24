@@ -25,7 +25,6 @@ public class HotkeyService : IDisposable
     private const uint VK_RIGHT           = 0x27;
     private const uint VK_X               = 0x58;
     private const uint VK_R               = 0x52;
-    private const uint VK_P               = 0x50;
     private const uint VK_MEDIA_PLAY_PAUSE = 0xB3;
 
     // RegisterHotKey IDs (Speak removed — handled by keyboard hook below)
@@ -34,7 +33,6 @@ public class HotkeyService : IDisposable
     private const int ID_SPEED_DOWN    = 9004;
     private const int ID_STOP          = 9005;
     private const int ID_REREAD        = 9006;
-    private const int ID_PAUSE         = 9007;
     private const int ID_NEXT_TERMINAL = 9008;
     private const int ID_PREV_TERMINAL = 9009;
 
@@ -79,7 +77,6 @@ public class HotkeyService : IDisposable
     public event Action? SpeedDownPressed;
     public event Action? StopPressed;
     public event Action? ReReadPressed;
-    public event Action? PauseTogglePressed;
     public event Action? NextTerminalPressed;
     public event Action? PrevTerminalPressed;
 
@@ -158,7 +155,6 @@ public class HotkeyService : IDisposable
         RegisterHotKey(_hwnd, ID_SPEED_DOWN,    MOD_CONTROL | MOD_ALT   | MOD_NOREPEAT, VK_DOWN);
         RegisterHotKey(_hwnd, ID_STOP,          MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_X);
         RegisterHotKey(_hwnd, ID_REREAD,        MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_R);
-        RegisterHotKey(_hwnd, ID_PAUSE,         MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_P);
         RegisterHotKey(_hwnd, ID_NEXT_TERMINAL, MOD_CONTROL | MOD_ALT   | MOD_NOREPEAT, VK_RIGHT);
         RegisterHotKey(_hwnd, ID_PREV_TERMINAL, MOD_CONTROL | MOD_ALT   | MOD_NOREPEAT, VK_LEFT);
     }
@@ -235,7 +231,6 @@ public class HotkeyService : IDisposable
                 case ID_SPEED_DOWN:    SpeedDownPressed?.Invoke();    break;
                 case ID_STOP:          StopPressed?.Invoke();         break;
                 case ID_REREAD:        ReReadPressed?.Invoke();       break;
-                case ID_PAUSE:         PauseTogglePressed?.Invoke();  break;
                 case ID_NEXT_TERMINAL: NextTerminalPressed?.Invoke(); break;
                 case ID_PREV_TERMINAL: PrevTerminalPressed?.Invoke(); break;
             }

@@ -1,12 +1,16 @@
 # Changelog
 
+## 0.8.0 — 2026-03-24
+
+### Removed
+- **Pause/Resume** — button, Ctrl+Shift+P hotkey, and all underlying logic (TtsService pause state, mid-generation wait loop, requeue-on-pause). Simplifies TTS pipeline. Action buttons now just Replay + Stop.
+
 ## 0.7.0 — 2026-03-24
 
 ### Changed
 - **Badge-based session routing**: replaced transcript-path MD5 session IDs with stable badge numbers (1, 2, 3…) assigned at link time. Badges survive new conversations, Claude Code restarts, and transcript path changes. TerminalService writes `claudevoice_badge_{pid}.txt` for all descendant PIDs every 3s so Python hooks can self-identify.
 - Per-badge cursor files (`tts_cursor_b{N}.txt`) — eliminates cross-session cursor contamination that caused hooks to skip audio
 - Queue directory polling every ~2s as fallback for FileSystemWatcher missed events
-- Pause during edge-tts generation now waits for completion instead of killing and regenerating (fixes "extra clicks needed to resume")
 - Terminal row UI shows badge number before display name
 
 ### Removed

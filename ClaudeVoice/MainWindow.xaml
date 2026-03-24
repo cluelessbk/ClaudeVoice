@@ -223,16 +223,11 @@
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="6"/>
             <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="6"/>
-            <ColumnDefinition Width="*"/>
           </Grid.ColumnDefinitions>
           <Button Grid.Column="0" Content="▶  Replay"
                   Style="{StaticResource ActionButtonStyle}"
                   Click="ReRead_Click"/>
-          <Button x:Name="PausePlayButton" Grid.Column="2" Content="⏸  Pause"
-                  Style="{StaticResource ActionButtonStyle}"
-                  Click="PausePlay_Click"/>
-          <Button Grid.Column="4" Content="⏹  Stop"
+          <Button Grid.Column="2" Content="⏹  Stop"
                   Style="{StaticResource ActionButtonStyle}"
                   Click="Stop_Click"/>
         </Grid>
@@ -260,41 +255,37 @@
             <RowDefinition Height="18"/>
             <RowDefinition Height="18"/>
             <RowDefinition Height="18"/>
-            <RowDefinition Height="18"/>
           </Grid.RowDefinitions>
 
           <TextBlock Grid.Row="0" Grid.Column="0" Text="Ctrl+Space"       Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
           <TextBlock Grid.Row="0" Grid.Column="1" Text="Record / stop recording" Foreground="{StaticResource TextBrush}" FontSize="10"/>
 
-          <TextBlock Grid.Row="1" Grid.Column="0" Text="Ctrl+Shift+P"     Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="1" Grid.Column="1" Text="Pause / resume"   Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+          <TextBlock Grid.Row="1" Grid.Column="0" Text="Ctrl+Shift+X"     Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="1" Grid.Column="1" Text="Stop audio"       Foreground="{StaticResource TextBrush}"    FontSize="10"/>
 
-          <TextBlock Grid.Row="2" Grid.Column="0" Text="Ctrl+Shift+X"     Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="2" Grid.Column="1" Text="Stop audio"       Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+          <TextBlock Grid.Row="2" Grid.Column="0" Text="Ctrl+Shift+R"     Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="2" Grid.Column="1" Text="Replay last"      Foreground="{StaticResource TextBrush}"    FontSize="10"/>
 
-          <TextBlock Grid.Row="3" Grid.Column="0" Text="Ctrl+Shift+R"     Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="3" Grid.Column="1" Text="Replay last"      Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+          <TextBlock Grid.Row="3" Grid.Column="0" Text="Ctrl+Alt+T"       Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="3" Grid.Column="1" Text="Toggle voice on/off" Foreground="{StaticResource TextBrush}" FontSize="10"/>
 
-          <TextBlock Grid.Row="4" Grid.Column="0" Text="Ctrl+Alt+T"       Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="4" Grid.Column="1" Text="Toggle voice on/off" Foreground="{StaticResource TextBrush}" FontSize="10"/>
+          <TextBlock Grid.Row="4" Grid.Column="0" Text="Ctrl+Alt+↑"       Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="4" Grid.Column="1" Text="Speed up"         Foreground="{StaticResource TextBrush}"    FontSize="10"/>
 
-          <TextBlock Grid.Row="5" Grid.Column="0" Text="Ctrl+Alt+↑"       Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="5" Grid.Column="1" Text="Speed up"         Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+          <TextBlock Grid.Row="5" Grid.Column="0" Text="Ctrl+Alt+↓"       Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="5" Grid.Column="1" Text="Slow down"        Foreground="{StaticResource TextBrush}"    FontSize="10"/>
 
-          <TextBlock Grid.Row="6" Grid.Column="0" Text="Ctrl+Alt+↓"       Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="6" Grid.Column="1" Text="Slow down"        Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+          <TextBlock Grid.Row="6" Grid.Column="0" Text="Ctrl+Alt+← / →"  Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="6" Grid.Column="1" Text="Switch terminal"  Foreground="{StaticResource TextBrush}"    FontSize="10"/>
 
-          <TextBlock Grid.Row="7" Grid.Column="0" Text="Ctrl+Alt+← / →"  Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="7" Grid.Column="1" Text="Switch terminal"  Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+          <TextBlock Grid.Row="7" Grid.Column="0" Text="Headset unmute"   Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="7" Grid.Column="1" Text="Start recording"  Foreground="{StaticResource TextBrush}"    FontSize="10"/>
 
-          <TextBlock Grid.Row="8"  Grid.Column="0" Text="Headset unmute"  Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="8"  Grid.Column="1" Text="Start recording" Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+          <TextBlock Grid.Row="8" Grid.Column="0" Text="Headset mute"     Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="8" Grid.Column="1" Text="Stop + transcribe" Foreground="{StaticResource TextBrush}"   FontSize="10"/>
 
-          <TextBlock Grid.Row="9"  Grid.Column="0" Text="Headset mute"    Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="9"  Grid.Column="1" Text="Stop + transcribe" Foreground="{StaticResource TextBrush}"  FontSize="10"/>
-
-          <TextBlock Grid.Row="10" Grid.Column="0" Text="Headset hang-up" Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="10" Grid.Column="1" Text="Submit / cycle pending" Foreground="{StaticResource TextBrush}" FontSize="10"/>
+          <TextBlock Grid.Row="9" Grid.Column="0" Text="Headset hang-up"  Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="9" Grid.Column="1" Text="Submit / cycle pending" Foreground="{StaticResource TextBrush}" FontSize="10"/>
         </Grid>
 
       </StackPanel>

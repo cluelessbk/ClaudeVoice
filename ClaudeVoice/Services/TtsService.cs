@@ -28,12 +28,10 @@ public class TtsService : IDisposable
 
     private string _lastText        = "";
     private string _activeSessionId = "";       // badge number as string ("1", "2", …)
-    private volatile bool _isPaused = false;
     private int  _rate    = 0;
     private bool _enabled = true;
 
     public string ActiveSessionId  => _activeSessionId;
-    public bool   IsPaused         => _isPaused;
     // volatile int: 0 = unknown, positive = PID. Read safely from any thread.
     private volatile int _activeProcessId = 0;
     public int? ActiveProcessId => _activeProcessId == 0 ? null : _activeProcessId;
@@ -47,8 +45,6 @@ public class TtsService : IDisposable
     public event Action<bool>?         PlayingChanged;
     // fired when edge-tts fails — message surfaced to UI
     public event Action<string>?       TtsErrorOccurred;
-    // true = paused, false = playing/resumed
-    public event Action<bool>?         PausedChanged;
     // (badge, hasPending) — drives the notification badge on terminal rows
     public event Action<string, bool>? SessionPendingChanged;
 
@@ -75,8 +71,7 @@ public class TtsService : IDisposable
     // ── Session management ────────────────────────────────────────────────────
 
     /// <summary>
-    /// Switch the active session by badge. Clicking the already-active session
-    /// toggles pause/resume.
+    /// Switch the active session by badge.
     /// </summary>
     public void SetActiveSession(string badge, int? processId = null, IntPtr windowHandle = default)
     {
@@ -84,14 +79,10 @@ public class TtsService : IDisposable
         _activeWindowHandle = windowHandle;
 
         if (badge == _activeSessionId)
-        {
-            TogglePause();
             return;
-        }
 
         // Switch to new session
         _activeSessionId = badge;
-        _isPaused        = false;
 
         // Cancel current playback so ProcessLoop wakes up and starts the new session
         var oldCts = Interlocked.Exchange(ref _stopCts, new CancellationTokenSource());
@@ -101,40 +92,6 @@ public class TtsService : IDisposable
         _player?.Stop();
 
         SessionPendingChanged?.Invoke(badge, false);
-        PausedChanged?.Invoke(false);
-    }
-
-    public void TogglePause()
-    {
-        if (_isPaused) Resume();
-        else Pause();
-    }
-
-    public void Pause()
-    {
-        if (_isPaused) return;
-        _isPaused = true;
-
-        // If NAudio is actively playing, pause it in place (resumes from same position).
-        // If edge-tts is still generating, just set the flag — SpeakText checks _isPaused
-        // before starting playback so it will pause without needing to regenerate.
-        var player = _player;
-        if (player != null && player.PlaybackState == PlaybackState.Playing)
-            player.Pause();
-
-        PausedChanged?.Invoke(true);
-    }
-
-    public void Resume()
-    {
-        if (!_isPaused) return;
-        _isPaused = false;
-
-        var player = _player;
-        if (player != null && player.PlaybackState == PlaybackState.Paused)
-            player.Play();
-
-        PausedChanged?.Invoke(false);
     }
 
     // ── Stop ─────────────────────────────────────────────────────────────────
@@ -168,8 +125,6 @@ public class TtsService : IDisposable
             }
         }
 
-        _isPaused = false;
-        PausedChanged?.Invoke(false);
     }
 
     // ── Queue management ──────────────────────────────────────────────────────
@@ -243,26 +198,6 @@ public class TtsService : IDisposable
         return false;
     }
 
-    private void RequeueTextAtFront(string sessionId, string text)
-    {
-        if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(text)) return;
-        var tmpPath = Path.Combine(Path.GetTempPath(), $"cv_pause_{Guid.NewGuid()}.txt");
-        try
-        {
-            File.WriteAllText(tmpPath, text);
-            lock (_queueLock)
-            {
-                if (!_sessionQueues.TryGetValue(sessionId, out var queue))
-                {
-                    queue = new LinkedList<string>();
-                    _sessionQueues[sessionId] = queue;
-                }
-                queue.AddFirst(tmpPath);
-            }
-        }
-        catch { }
-    }
-
     // ── Process loop ──────────────────────────────────────────────────────────
 
     private int _pollCounter = 0;
@@ -271,21 +206,12 @@ public class TtsService : IDisposable
     {
         while (!ct.IsCancellationRequested)
         {
-            if (!_isPaused && _enabled && TryDequeueForActiveSession(out var filePath))
+            if (_enabled && TryDequeueForActiveSession(out var filePath))
             {
-                var sessionAtStart = _activeSessionId;
-                using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, _stopCts.Token);
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stopCts.Token);
 
                 try { await SpeakFile(filePath, linked.Token); }
                 catch (OperationCanceledException) { }
-
-                if (!string.IsNullOrEmpty(_lastText))
-                {
-                    bool paused        = _isPaused && _activeSessionId == sessionAtStart;
-                    bool sessionSwitch = linked.Token.IsCancellationRequested && _activeSessionId != sessionAtStart;
-                    if (paused || sessionSwitch)
-                        RequeueTextAtFront(sessionAtStart, _lastText);
-                }
             }
             else
             {
@@ -403,14 +329,6 @@ public class TtsService : IDisposable
 
                 if (ct.IsCancellationRequested) return;
 
-                // If paused during edge-tts generation, wait here until resumed
-                while (_isPaused && !ct.IsCancellationRequested)
-                {
-                    try { await Task.Delay(100, ct).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { break; }
-                }
-                if (ct.IsCancellationRequested) return;
-
                 PlayingChanged?.Invoke(true);
                 using var reader = new Mp3FileReader(mp3Path);
                 using var wave   = new WaveOutEvent();
@@ -419,8 +337,7 @@ public class TtsService : IDisposable
                 wave.Play();
 
                 while (!ct.IsCancellationRequested &&
-                       (wave.PlaybackState == PlaybackState.Playing ||
-                        wave.PlaybackState == PlaybackState.Paused))
+                       wave.PlaybackState == PlaybackState.Playing)
                 {
                     try { await Task.Delay(100, ct).ConfigureAwait(false); }
                     catch (OperationCanceledException) { break; }
@@ -493,9 +410,22 @@ public class TtsService : IDisposable
             }
         }
 
-        RequeueTextAtFront(_activeSessionId, _lastText);
-        _isPaused = false;
-        PausedChanged?.Invoke(false);
+        // Re-enqueue the last text at the front so ProcessLoop picks it up immediately
+        var tmpPath = Path.Combine(Path.GetTempPath(), $"cv_replay_{Guid.NewGuid()}.txt");
+        try
+        {
+            File.WriteAllText(tmpPath, _lastText);
+            lock (_queueLock)
+            {
+                if (!_sessionQueues.TryGetValue(_activeSessionId, out var q))
+                {
+                    q = new LinkedList<string>();
+                    _sessionQueues[_activeSessionId] = q;
+                }
+                q.AddFirst(tmpPath);
+            }
+        }
+        catch { }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

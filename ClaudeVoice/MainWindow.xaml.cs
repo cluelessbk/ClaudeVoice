@@ -63,11 +63,7 @@ public partial class MainWindow : Window
         _stt.MicUnmuted += () => Dispatcher.Invoke(StartSpeak);
         _stt.MicMuted   += () => Dispatcher.InvokeAsync(StopAndTranscribe);
 
-        // TTS pause/resume state → update Pause button label
-        _tts.PausedChanged += paused =>
-            Dispatcher.Invoke(() => PausePlayButton.Content = paused ? "▶  Resume" : "⏸  Pause");
-
-        _tts.PlayingChanged += _ => { }; // placeholder for future Play button restoration
+        _tts.PlayingChanged += _ => { }; // placeholder for future use
 
         // Surface TTS errors to the UI so silent failures are visible
         _tts.TtsErrorOccurred += msg =>
@@ -107,7 +103,6 @@ public partial class MainWindow : Window
         _hotkeys.SpeedDownPressed   += () => Dispatcher.Invoke(SlowDown);
         _hotkeys.StopPressed        += () => _tts.StopCurrent();
         _hotkeys.ReReadPressed      += () => _tts.ReplayLast();
-        _hotkeys.PauseTogglePressed += () => _tts.TogglePause();
         _hotkeys.NextTerminalPressed += () => Dispatcher.Invoke(() => SwitchTerminal(+1));
         _hotkeys.PrevTerminalPressed += () => Dispatcher.Invoke(() => SwitchTerminal(-1));
         _hotkeys.MediaSubmitPressed  += () => Task.Run(() => TerminalTypist.SendEnter(_tts.ActiveWindowHandle));
@@ -496,9 +491,6 @@ public partial class MainWindow : Window
 
     private void ReRead_Click(object sender, RoutedEventArgs e)
         => _tts.ReplayLast();
-
-    private void PausePlay_Click(object sender, RoutedEventArgs e)
-        => _tts.TogglePause();
 
     // ── Ping sound ────────────────────────────────────────────────────────────
 

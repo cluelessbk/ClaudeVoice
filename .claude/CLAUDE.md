@@ -45,7 +45,6 @@ Launch: `D:/My Claude/TalkingPoint/publish/ClaudeVoice.exe`
 - [ ] Badge routing: link terminal, start new conversation, verify audio still plays
 - [ ] Multi-session: two terminals with badges 1 and 2, correct audio routing
 - [ ] Beep schedule — 10s beep / 50s silent per minute, 5 min total
-- [ ] Pause during edge-tts generation — resume plays instantly without regeneration
 - [ ] Hang-up cycling — submit transcription > cycle to pending > send Enter
 
 ## Known issues
@@ -62,4 +61,3 @@ Launch: `D:/My Claude/TalkingPoint/publish/ClaudeVoice.exe`
 - HWND-based dedup for terminal linking — Windows Terminal shares a PID across windows.
 - Per-badge cursor files (`tts_cursor_b{N}.txt`) prevent cross-session cursor contamination.
 - Queue directory polling every ~2s as fallback for FileSystemWatcher missed events.
-- Pause during edge-tts generation waits for completion instead of killing + regenerating.
