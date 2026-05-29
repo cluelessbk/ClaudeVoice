@@ -1,6 +1,7 @@
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Controls;
@@ -168,6 +169,85 @@ public partial class MainWindow : Window
         _stt.Dispose();
         _terminals.Dispose();
         _fw.Dispose();
+    }
+
+    // ── Borderless-window resize + aspect-ratio lock ────────────────────────────
+    // WindowStyle=None + AllowsTransparency means Windows draws no resize border, so
+    // we hit-test the edges ourselves (WM_NCHITTEST) to make them draggable, and pin
+    // the 320:652 design ratio (WM_SIZING) so the Viewbox always fills with no gaps.
+    private const double DesignAspect = 320.0 / 652.0; // width / height
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        var src = (HwndSource)PresentationSource.FromVisual(this)!;
+        src.AddHook(ResizeHook);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+    private IntPtr ResizeHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        const int WM_NCHITTEST = 0x0084;
+        const int WM_SIZING    = 0x0214;
+
+        if (msg == WM_NCHITTEST)
+        {
+            // 6 device-independent px grab border, scaled to physical pixels for DPI
+            double scale = PresentationSource.FromVisual(this)!.CompositionTarget!.TransformToDevice.M11;
+            int b = (int)(6 * scale);
+
+            GetWindowRect(hwnd, out RECT r);
+            int x = (short)((long)lParam & 0xFFFF);
+            int y = (short)(((long)lParam >> 16) & 0xFFFF);
+
+            bool left   = x <  r.Left   + b;
+            bool right  = x >= r.Right  - b;
+            bool top    = y <  r.Top    + b;
+            bool bottom = y >= r.Bottom - b;
+
+            int hit =
+                top && left     ? 13 /*HTTOPLEFT*/     :
+                top && right    ? 14 /*HTTOPRIGHT*/    :
+                bottom && left  ? 16 /*HTBOTTOMLEFT*/  :
+                bottom && right ? 17 /*HTBOTTOMRIGHT*/ :
+                left            ? 10 /*HTLEFT*/        :
+                right           ? 11 /*HTRIGHT*/       :
+                top             ? 12 /*HTTOP*/         :
+                bottom          ? 15 /*HTBOTTOM*/      :
+                                  1  /*HTCLIENT*/;
+            handled = true;
+            return (IntPtr)hit;
+        }
+
+        if (msg == WM_SIZING)
+        {
+            var r = Marshal.PtrToStructure<RECT>(lParam);
+            int w = r.Right - r.Left;
+            int h = r.Bottom - r.Top;
+
+            // wParam = WMSZ_*: 1 L, 2 R, 3 T, 4 TL, 5 TR, 6 B, 7 BL, 8 BR
+            switch (wParam.ToInt32())
+            {
+                case 1: case 2:           // left / right edge → height from width
+                    r.Bottom = r.Top + (int)(w / DesignAspect); break;
+                case 3: case 6:           // top / bottom edge → width from height
+                    r.Right = r.Left + (int)(h * DesignAspect); break;
+                case 4: case 5:           // top corners → adjust top edge
+                    r.Top = r.Bottom - (int)(w / DesignAspect); break;
+                default:                   // bottom corners (7, 8)
+                    r.Bottom = r.Top + (int)(w / DesignAspect); break;
+            }
+            Marshal.StructureToPtr(r, lParam, false);
+            handled = true;
+            return (IntPtr)1;
+        }
+
+        return IntPtr.Zero;
     }
 
     // ── Drag bar ──────────────────────────────────────────────────────────────
