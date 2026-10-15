@@ -219,12 +219,17 @@ public class TtsService : IDisposable
     /// <summary>Runs edge-tts. Returns null on success, or a plain-language error.</summary>
     private async Task<string?> RunEdgeTts(string txtPath, string mp3Path, CancellationToken ct)
     {
+        // All three streams redirected: ClaudeVoice is a GUI app with no console,
+        // so un-redirected stdin/stdout reach Python as None and edge-tts ≥7.3
+        // crashes on sys.stdin.isatty().
         var psi = new ProcessStartInfo
         {
-            FileName              = _edgeTtsFileName,
-            UseShellExecute       = false,
-            CreateNoWindow        = true,
-            RedirectStandardError = true,
+            FileName               = _edgeTtsFileName,
+            UseShellExecute        = false,
+            CreateNoWindow         = true,
+            RedirectStandardInput  = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
         };
         foreach (var arg in _edgeTtsPrefixArgs)
             psi.ArgumentList.Add(arg);
@@ -240,9 +245,11 @@ public class TtsService : IDisposable
         if (proc == null) return "Could not start edge-tts.";
 
         _currentEdgeProc = proc;
+        proc.StandardInput.Close();
         string stderr;
         try
         {
+            _ = proc.StandardOutput.ReadToEndAsync(ct);   // drain so it can never block
             var stderrTask = proc.StandardError.ReadToEndAsync(ct);
             await proc.WaitForExitAsync(ct);
             stderr = await stderrTask;

@@ -63,6 +63,7 @@ Launch: `D:/My Claude/TalkingPoint/publish/ClaudeVoice.exe`
 - Link = one file with one PID (WT: the tab's shell), checked by the hooks; replaces rewriting ~30 badge files every 3 s.
 - Jabra Play button unsolvable (SDK consumes it with callActive=true). Hang-up button used instead: submit if a transcription is waiting, else stop audio.
 - SendKeys("{ENTER}") via PowerShell — SendInput with VK_RETURN doesn't reach Windows Terminal.
+- edge-tts runs with stdin/stdout/stderr all redirected: as a GUI app ClaudeVoice has no console, and edge-tts ≥7.3 crashes on `sys.stdin.isatty()` when stdin is None. Test TTS with the app launched from Explorer (`explorer.exe publish\ClaudeVoice.exe`), not from a shell — a shell launch hides this class of bug.
 - Text goes to edge-tts via `--file`, not `--text` (Windows command line caps at ~32k chars).
 - edge-tts failure is detected by exit code + non-empty mp3 (it leaves an empty file behind on failure).
 - Queue directory polling every ~2s as fallback for FileSystemWatcher missed events.

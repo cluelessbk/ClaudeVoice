@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.1 — 2026-10-15
+
+### Fixed
+- **No speech with edge-tts 7.3+** — `'NoneType' object has no attribute 'isatty'`: the app gave edge-tts no stdin/stdout (GUI app, no console); all three streams are now redirected
+
 ## 0.10.0 — 2026-10-15
 
 ### Changed
