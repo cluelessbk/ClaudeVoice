@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using NAudio.Wave;
@@ -6,47 +5,35 @@ using NAudio.Wave;
 namespace ClaudeVoice.Services;
 
 /// <summary>
-/// Manages per-session audio queues keyed by badge number (e.g. "1", "2").
-/// Each linked terminal gets a badge at link time. Python hooks include the
-/// badge in audio filenames (b1_*.txt, b2_*.txt). Only the active badge's
-/// queue plays. Switching sessions auto-pauses the current one.
+/// Plays the text files the Python hooks drop into audio_queue/, in order,
+/// by turning each into speech with edge-tts and playing the resulting mp3.
 /// </summary>
 public class TtsService : IDisposable
 {
+    private const string Voice = "en-GB-RyanNeural";
+
     private readonly FileWatcherService _fw;
     private readonly CancellationTokenSource _cts = new();   // service lifetime
-    private readonly SemaphoreSlim _playLock = new(1, 1);
     private readonly object _queueLock = new();
-    private readonly Dictionary<string, LinkedList<string>> _sessionQueues = new();
+    private readonly LinkedList<string> _queue = new();
 
     private volatile WaveOutEvent? _player;
     private volatile Process? _currentEdgeProc;
+    // Replaced (and the old one cancelled) on every Stop/Replay. Old ones are
+    // deliberately not disposed: the loop may still be reading their Token.
     private CancellationTokenSource _stopCts = new();
 
     private readonly string   _edgeTtsFileName;
     private readonly string[] _edgeTtsPrefixArgs;
 
-    private string _lastText        = "";
-    private string _activeSessionId = "";       // badge number as string ("1", "2", …)
-    private int  _rate    = 0;
-    private bool _enabled = true;
-
-    public string ActiveSessionId  => _activeSessionId;
-    // volatile int: 0 = unknown, positive = PID. Read safely from any thread.
-    private volatile int _activeProcessId = 0;
-    public int? ActiveProcessId => _activeProcessId == 0 ? null : _activeProcessId;
-
-    // HWND of the active session's terminal window — targets the exact window
-    // even when Windows Terminal shares a PID across multiple windows.
-    private IntPtr _activeWindowHandle = IntPtr.Zero;
-    public IntPtr ActiveWindowHandle => _activeWindowHandle;
+    private string _lastText = "";
+    private volatile int  _rate    = 0;
+    private volatile bool _enabled = true;
 
     // true = playback started, false = playback ended
-    public event Action<bool>?         PlayingChanged;
-    // fired when edge-tts fails — message surfaced to UI
-    public event Action<string>?       TtsErrorOccurred;
-    // (badge, hasPending) — drives the notification badge on terminal rows
-    public event Action<string, bool>? SessionPendingChanged;
+    public event Action<bool>?   PlayingChanged;
+    // fired when speech fails — plain-language message for the UI
+    public event Action<string>? TtsErrorOccurred;
 
     public TtsService(FileWatcherService fw)
     {
@@ -55,210 +42,137 @@ public class TtsService : IDisposable
         _rate    = fw.ReadTtsRate();
         (_edgeTtsFileName, _edgeTtsPrefixArgs) = FindEdgeTts();
 
-        // No session init from file — auto-adopt handles it when first audio arrives
-
-        fw.AudioFileArrived  += OnAudioFileArrived;
+        fw.AudioFileArrived  += Enqueue;
         fw.TtsEnabledChanged += v => _enabled = v;
         fw.TtsRateChanged    += v => _rate = v;
 
-        // Clear any stale queue files left over from a previous session.
+        // Clear any stale queue files left over from a previous run.
         foreach (var f in fw.GetQueueFiles())
             fw.DeleteQueueFile(f);
 
         Task.Run(() => ProcessLoop(_cts.Token));
     }
 
-    // ── Session management ────────────────────────────────────────────────────
+    // ── Controls ──────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Switch the active session by badge.
-    /// </summary>
-    public void SetActiveSession(string badge, int? processId = null, IntPtr windowHandle = default)
-    {
-        _activeProcessId    = processId ?? 0;
-        _activeWindowHandle = windowHandle;
-
-        if (badge == _activeSessionId)
-            return;
-
-        // Switch to new session
-        _activeSessionId = badge;
-
-        // Cancel current playback so ProcessLoop wakes up and starts the new session
-        var oldCts = Interlocked.Exchange(ref _stopCts, new CancellationTokenSource());
-        oldCts.Cancel();
-        oldCts.Dispose();
-        try { _currentEdgeProc?.Kill(entireProcessTree: true); } catch { }
-        _player?.Stop();
-
-        SessionPendingChanged?.Invoke(badge, false);
-    }
-
-    // ── Stop ─────────────────────────────────────────────────────────────────
-
+    /// <summary>Stops the current speech and drops everything still queued.</summary>
     public void StopCurrent()
     {
-        var oldCts = Interlocked.Exchange(ref _stopCts, new CancellationTokenSource());
-        oldCts.Cancel();
-        oldCts.Dispose();
+        CancelPlayback();
+
+        lock (_queueLock)
+        {
+            // Remember the newest queued message so Replay can still play it
+            if (_queue.Last != null)
+            {
+                try { _lastText = File.ReadAllText(_queue.Last.Value).Trim(); } catch { }
+            }
+            ClearQueue();
+        }
+    }
+
+    /// <summary>Stops whatever is playing and speaks the last message again.</summary>
+    public void ReplayLast()
+    {
+        if (string.IsNullOrWhiteSpace(_lastText)) return;
+
+        CancelPlayback();
+
+        var tmpPath = Path.Combine(Path.GetTempPath(), $"cv_replay_{Guid.NewGuid()}.txt");
+        try
+        {
+            File.WriteAllText(tmpPath, _lastText);
+            lock (_queueLock)
+            {
+                ClearQueue();
+                _queue.AddFirst(tmpPath);
+            }
+        }
+        catch { }
+    }
+
+    private void CancelPlayback()
+    {
+        Interlocked.Exchange(ref _stopCts, new CancellationTokenSource()).Cancel();
         try { _currentEdgeProc?.Kill(entireProcessTree: true); } catch { }
         _player?.Stop();
-
-        lock (_queueLock)
-        {
-            if (_sessionQueues.TryGetValue(_activeSessionId, out var queue))
-            {
-                if (queue.Last != null)
-                {
-                    try
-                    {
-                        var lastFile = queue.Last.Value;
-                        if (File.Exists(lastFile))
-                            _lastText = File.ReadAllText(lastFile).Trim();
-                    }
-                    catch { }
-                }
-
-                var node = queue.First;
-                while (node != null) { _fw.DeleteQueueFile(node.Value); node = node.Next; }
-                queue.Clear();
-            }
-        }
-
     }
 
-    // ── Queue management ──────────────────────────────────────────────────────
+    // ── Queue ─────────────────────────────────────────────────────────────────
 
-    private void OnAudioFileArrived(string filePath)
+    private void Enqueue(string filePath)
     {
-        var badge = ParseBadgeFromFilename(filePath);
-        if (string.IsNullOrEmpty(badge))
-        {
-            _fw.DeleteQueueFile(filePath);
-            return;
-        }
-
-        // Auto-adopt: if no active session, treat the first badge as active.
-        if (string.IsNullOrEmpty(_activeSessionId))
-            _activeSessionId = badge;
-
-        // Only accept audio from known badges (active or previously queued).
-        // Badges come from claudevoice_badge_{pid}.txt files written by TerminalService,
-        // so only linked terminals produce valid badges.
-        bool known = badge == _activeSessionId;
-        if (!known)
-        {
-            lock (_queueLock) { known = _sessionQueues.ContainsKey(badge); }
-        }
-        if (!known)
-        {
-            _fw.DeleteQueueFile(filePath);
-            return;
-        }
-
         lock (_queueLock)
         {
-            if (!_sessionQueues.TryGetValue(badge, out var queue))
-            {
-                queue = new LinkedList<string>();
-                _sessionQueues[badge] = queue;
-            }
-            queue.AddLast(filePath);
+            if (!_queue.Contains(filePath, StringComparer.OrdinalIgnoreCase))
+                _queue.AddLast(filePath);
         }
-
-        if (badge != _activeSessionId)
-            SessionPendingChanged?.Invoke(badge, true);
     }
 
-    /// <summary>
-    /// Extracts badge number from filename format "b{N}_{timestamp}.txt".
-    /// Returns "" for files that don't match (old format or invalid).
-    /// </summary>
-    private static string ParseBadgeFromFilename(string path)
+    // Caller holds _queueLock
+    private void ClearQueue()
     {
-        var name  = Path.GetFileNameWithoutExtension(path);
-        var parts = name.Split('_');
-        if (parts.Length >= 2 && parts[0].StartsWith('b') && parts[0].Length > 1)
-            return parts[0][1..];   // "b1" → "1"
-        return "";
+        foreach (var f in _queue) _fw.DeleteQueueFile(f);
+        _queue.Clear();
     }
 
-    private bool TryDequeueForActiveSession(out string filePath)
+    private bool TryDequeue(out string filePath)
     {
-        filePath = "";
         lock (_queueLock)
         {
-            if (_sessionQueues.TryGetValue(_activeSessionId, out var queue) && queue.Count > 0)
+            if (_queue.First != null)
             {
-                filePath = queue.First!.Value;
-                queue.RemoveFirst();
+                filePath = _queue.First.Value;
+                _queue.RemoveFirst();
                 return true;
             }
         }
+        filePath = "";
         return false;
     }
 
     // ── Process loop ──────────────────────────────────────────────────────────
 
-    private int _pollCounter = 0;
-
     private async Task ProcessLoop(CancellationToken ct)
     {
+        int pollCounter = 0;
         while (!ct.IsCancellationRequested)
         {
-            if (_enabled && TryDequeueForActiveSession(out var filePath))
+            try
             {
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stopCts.Token);
-
-                try { await SpeakFile(filePath, linked.Token); }
-                catch (OperationCanceledException) { }
-            }
-            else
-            {
-                // Fallback polling: every ~2s, scan queue directory for missed files
-                if (++_pollCounter >= 10)
+                if (_enabled && TryDequeue(out var filePath))
                 {
-                    _pollCounter = 0;
-                    PollQueueDirectory();
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stopCts.Token);
+                    await SpeakFile(filePath, linked.Token);
+                    continue;
                 }
 
-                try { await Task.Delay(200, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { break; }
+                // Fallback: every ~2s, pick up files the FileSystemWatcher missed
+                if (++pollCounter >= 10)
+                {
+                    pollCounter = 0;
+                    foreach (var f in _fw.GetQueueFiles()) Enqueue(f);
+                }
+
+                await Task.Delay(200, ct).ConfigureAwait(false);
             }
-        }
-    }
-
-    private void PollQueueDirectory()
-    {
-        var filesOnDisk = _fw.GetQueueFiles();
-        if (filesOnDisk.Length == 0) return;
-
-        HashSet<string> knownFiles;
-        lock (_queueLock)
-        {
-            knownFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var queue in _sessionQueues.Values)
-                foreach (var f in queue)
-                    knownFiles.Add(f);
-        }
-
-        foreach (var f in filesOnDisk)
-        {
-            if (!knownFiles.Contains(f))
-                OnAudioFileArrived(f);
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                // Never let one bad message kill speech for the rest of the session
+                Debug.WriteLine($"[TtsService] Loop error: {ex}");
+            }
         }
     }
 
     private async Task SpeakFile(string filePath, CancellationToken ct)
     {
-        if (!File.Exists(filePath)) return;
-
         string text;
-        try   { text = await File.ReadAllTextAsync(filePath, ct); }
+        try   { text = (await File.ReadAllTextAsync(filePath, ct)).Trim(); }
+        catch (OperationCanceledException) { throw; }
         catch { return; }
         finally { _fw.DeleteQueueFile(filePath); }
 
-        text = text.Trim();
         if (text.Length < 5) return;
 
         _lastText = text;
@@ -267,165 +181,114 @@ public class TtsService : IDisposable
 
     private async Task SpeakText(string text, CancellationToken ct)
     {
-        await _playLock.WaitAsync(ct);
-        var mp3Path = Path.Combine(Path.GetTempPath(), $"cv_{Guid.NewGuid()}.mp3");
+        var id      = Guid.NewGuid();
+        var txtPath = Path.Combine(Path.GetTempPath(), $"cv_{id}.txt");
+        var mp3Path = Path.Combine(Path.GetTempPath(), $"cv_{id}.mp3");
         try
         {
-            try
-            {
-                await File.WriteAllTextAsync(
-                    Path.Combine(_fw.ClaudeDir, "tts_last.txt"), text, ct)
-                    .ConfigureAwait(false);
-            }
+            try { await File.WriteAllTextAsync(Path.Combine(_fw.ClaudeDir, "tts_last.txt"), text, ct); }
+            catch (OperationCanceledException) { throw; }
             catch { }
 
-            string rateStr = _rate >= 0 ? $"+{_rate}%" : $"{_rate}%";
+            // Text goes via a file: the command line is capped at ~32k characters
+            await File.WriteAllTextAsync(txtPath, text, ct);
 
-            var edgePsi = new ProcessStartInfo
+            var error = await RunEdgeTts(txtPath, mp3Path, ct);
+            if (error != null)
             {
-                FileName              = _edgeTtsFileName,
-                UseShellExecute       = false,
-                CreateNoWindow        = true,
-                RedirectStandardError = true,
-            };
-            foreach (var arg in _edgeTtsPrefixArgs)
-                edgePsi.ArgumentList.Add(arg);
-            edgePsi.ArgumentList.Add("--voice");
-            edgePsi.ArgumentList.Add("en-GB-RyanNeural");
-            edgePsi.ArgumentList.Add($"--rate={rateStr}");
-            edgePsi.ArgumentList.Add("--text");
-            edgePsi.ArgumentList.Add(text);
-            edgePsi.ArgumentList.Add("--write-media");
-            edgePsi.ArgumentList.Add(mp3Path);
-
-            try
-            {
-                using var edgeProc = Process.Start(edgePsi);
-                _currentEdgeProc = edgeProc;
-                string stderr = "";
-                try
-                {
-                    if (edgeProc != null)
-                    {
-                        var stderrTask = edgeProc.StandardError.ReadToEndAsync(ct);
-                        await edgeProc.WaitForExitAsync(ct);
-                        stderr = await stderrTask;
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    try { edgeProc?.Kill(entireProcessTree: true); } catch { }
-                    return;
-                }
-                finally { _currentEdgeProc = null; }
-
-                if (!File.Exists(mp3Path))
-                {
-                    var msg = string.IsNullOrWhiteSpace(stderr) ? "no output file" : stderr.Trim();
-                    Debug.WriteLine($"[TtsService] edge-tts failed: {msg}");
-                    TtsErrorOccurred?.Invoke(msg);
-                    return;
-                }
-
-                if (ct.IsCancellationRequested) return;
-
-                PlayingChanged?.Invoke(true);
-                using var reader = new Mp3FileReader(mp3Path);
-                using var wave   = new WaveOutEvent();
-                _player = wave;
-                wave.Init(reader);
-                wave.Play();
-
-                while (!ct.IsCancellationRequested &&
-                       wave.PlaybackState == PlaybackState.Playing)
-                {
-                    try { await Task.Delay(100, ct).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { break; }
-                }
-
-                wave.Stop();
+                TtsErrorOccurred?.Invoke(error);
+                return;
             }
-            catch (OperationCanceledException) { }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[TtsService] Playback error: {ex.Message}");
-            }
-            finally
-            {
-                _player = null;
-                PlayingChanged?.Invoke(false);
-                try { File.Delete(mp3Path); } catch { }
-            }
+
+            ct.ThrowIfCancellationRequested();
+            await Play(mp3Path, ct);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[TtsService] Speak error: {ex}");
+            TtsErrorOccurred?.Invoke($"Playback failed: {ex.Message}");
         }
         finally
         {
-            _playLock.Release();
+            try { File.Delete(txtPath); } catch { }
+            try { File.Delete(mp3Path); } catch { }
         }
     }
 
-    // ── Queries ───────────────────────────────────────────────────────────────
-
-    public bool HasQueuedItems(string badge)
+    /// <summary>Runs edge-tts. Returns null on success, or a plain-language error.</summary>
+    private async Task<string?> RunEdgeTts(string txtPath, string mp3Path, CancellationToken ct)
     {
-        lock (_queueLock)
-            return _sessionQueues.TryGetValue(badge, out var q) && q.Count > 0;
-    }
-
-    public void RemoveSessionQueue(HashSet<string> liveBadges)
-    {
-        lock (_queueLock)
+        var psi = new ProcessStartInfo
         {
-            var dead = _sessionQueues.Keys.Where(id => !liveBadges.Contains(id)).ToList();
-            foreach (var id in dead)
-            {
-                if (_sessionQueues.TryGetValue(id, out var queue))
-                {
-                    foreach (var f in queue) _fw.DeleteQueueFile(f);
-                    queue.Clear();
-                }
-                _sessionQueues.Remove(id);
-            }
-        }
-    }
+            FileName              = _edgeTtsFileName,
+            UseShellExecute       = false,
+            CreateNoWindow        = true,
+            RedirectStandardError = true,
+        };
+        foreach (var arg in _edgeTtsPrefixArgs)
+            psi.ArgumentList.Add(arg);
+        psi.ArgumentList.Add("--voice");
+        psi.ArgumentList.Add(Voice);
+        psi.ArgumentList.Add(_rate >= 0 ? $"--rate=+{_rate}%" : $"--rate={_rate}%");
+        psi.ArgumentList.Add("--file");
+        psi.ArgumentList.Add(txtPath);
+        psi.ArgumentList.Add("--write-media");
+        psi.ArgumentList.Add(mp3Path);
 
-    // ── Replay last ───────────────────────────────────────────────────────────
+        using var proc = Process.Start(psi);
+        if (proc == null) return "Could not start edge-tts.";
 
-    public void ReplayLast()
-    {
-        if (string.IsNullOrWhiteSpace(_lastText)) return;
-
-        var oldCts = Interlocked.Exchange(ref _stopCts, new CancellationTokenSource());
-        oldCts.Cancel();
-        oldCts.Dispose();
-        try { _currentEdgeProc?.Kill(entireProcessTree: true); } catch { }
-        _player?.Stop();
-
-        lock (_queueLock)
-        {
-            if (_sessionQueues.TryGetValue(_activeSessionId, out var queue))
-            {
-                var node = queue.First;
-                while (node != null) { _fw.DeleteQueueFile(node.Value); node = node.Next; }
-                queue.Clear();
-            }
-        }
-
-        // Re-enqueue the last text at the front so ProcessLoop picks it up immediately
-        var tmpPath = Path.Combine(Path.GetTempPath(), $"cv_replay_{Guid.NewGuid()}.txt");
+        _currentEdgeProc = proc;
+        string stderr;
         try
         {
-            File.WriteAllText(tmpPath, _lastText);
-            lock (_queueLock)
-            {
-                if (!_sessionQueues.TryGetValue(_activeSessionId, out var q))
-                {
-                    q = new LinkedList<string>();
-                    _sessionQueues[_activeSessionId] = q;
-                }
-                q.AddFirst(tmpPath);
-            }
+            var stderrTask = proc.StandardError.ReadToEndAsync(ct);
+            await proc.WaitForExitAsync(ct);
+            stderr = await stderrTask;
         }
-        catch { }
+        catch (OperationCanceledException)
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { }
+            throw;
+        }
+        finally { _currentEdgeProc = null; }
+
+        // edge-tts leaves an empty file behind when it fails, so check the size too
+        var ok = proc.ExitCode == 0 && File.Exists(mp3Path) && new FileInfo(mp3Path).Length > 0;
+        if (ok) return null;
+
+        Debug.WriteLine($"[TtsService] edge-tts failed ({proc.ExitCode}): {stderr}");
+        if (stderr.Contains("403"))
+            return "Voice service refused (403). Run: pip install -U edge-tts";
+        var lastLine = stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries
+                                         | StringSplitOptions.TrimEntries).LastOrDefault();
+        return $"edge-tts failed: {lastLine ?? $"exit code {proc.ExitCode}"}";
+    }
+
+    private async Task Play(string mp3Path, CancellationToken ct)
+    {
+        PlayingChanged?.Invoke(true);
+        try
+        {
+            using var reader = new Mp3FileReader(mp3Path);
+            using var wave   = new WaveOutEvent();
+            _player = wave;
+            wave.Init(reader);
+            wave.Play();
+
+            while (!ct.IsCancellationRequested && wave.PlaybackState == PlaybackState.Playing)
+            {
+                try { await Task.Delay(100, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+            }
+            wave.Stop();
+        }
+        finally
+        {
+            _player = null;
+            PlayingChanged?.Invoke(false);
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -453,12 +316,7 @@ public class TtsService : IDisposable
     public void Dispose()
     {
         _cts.Cancel();
-        try { _currentEdgeProc?.Kill(entireProcessTree: true); } catch { }
-        _player?.Stop();
-        _playLock.Dispose();
-        _stopCts.Dispose();
-        _cts.Dispose();
-
+        CancelPlayback();
         foreach (var f in _fw.GetQueueFiles())
             _fw.DeleteQueueFile(f);
     }

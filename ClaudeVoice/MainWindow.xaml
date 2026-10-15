@@ -3,12 +3,12 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="ClaudeVoice"
         Icon="pack://application:,,,/assets/icon.ico"
-        Width="320" Height="652"
+        Width="320" Height="560"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
         ResizeMode="CanResize"
-        MinWidth="240" MinHeight="489"
+        MinWidth="240"
         Topmost="True"
         ShowInTaskbar="True"
         Left="100" Top="100">
@@ -22,9 +22,11 @@
           CornerRadius="12"
           BorderBrush="#2a2a4a"
           BorderThickness="1">
-    <!-- Viewbox scales the whole 320x652 design uniformly as the window resizes -->
+    <!-- Viewbox scales the whole 320-wide design uniformly as the window resizes.
+         RootGrid's height is set in code to fit the content (it changes when the
+         hotkey list is expanded or collapsed). -->
     <Viewbox Stretch="Uniform">
-    <Grid Width="320" Height="652">
+    <Grid x:Name="RootGrid" Width="320">
       <Grid.RowDefinitions>
         <RowDefinition Height="40"/>   <!-- drag bar -->
         <RowDefinition Height="*"/>    <!-- content -->
@@ -108,82 +110,36 @@
         <!-- Separator -->
         <Border Height="1" Background="#2a2a4a" Margin="0,0,0,8"/>
 
-        <!-- Terminals section -->
-        <TextBlock Text="TERMINALS"
+        <!-- Link: the one terminal Claude Voice speaks for and types into -->
+        <TextBlock x:Name="LinkStatus" Text="Not linked"
                    Foreground="{StaticResource SubtextBrush}"
-                   FontSize="10" FontWeight="Bold"
-                   Margin="0,0,0,4"/>
+                   FontSize="11" TextAlignment="Center"
+                   TextTrimming="CharacterEllipsis"
+                   Margin="0,0,0,6"/>
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="6"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <!-- Spans both columns while not linked (Unlink hidden) -->
+          <Button x:Name="LinkButton" Grid.Column="0" Grid.ColumnSpan="3"
+                  Content="Link terminal"
+                  Style="{StaticResource ActionButtonStyle}"
+                  Click="LinkButton_Click"/>
+          <Button x:Name="UnlinkButton" Grid.Column="2"
+                  Content="Unlink"
+                  Style="{StaticResource ActionButtonStyle}"
+                  Click="UnlinkButton_Click"
+                  Visibility="Collapsed"/>
+        </Grid>
 
-        <ItemsControl x:Name="TerminalsList"
-                      MinHeight="60" MaxHeight="110"
-                      Margin="0,0,0,8">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <Border Background="{Binding RowBackground}"
-                      CornerRadius="4" Margin="0,1"
-                      Cursor="Hand"
-                      MouseLeftButtonDown="TerminalRow_Click"
-                      Padding="8,5">
-                <StackPanel Orientation="Horizontal">
-                  <TextBlock Text="{Binding StatusIcon}" Margin="0,0,6,0" FontSize="12">
-                    <TextBlock.Style>
-                      <Style TargetType="TextBlock">
-                        <Style.Triggers>
-                          <!-- Pulse the 🔔 icon when this session has pending audio -->
-                          <DataTrigger Binding="{Binding HasPending}" Value="True">
-                            <Setter Property="Foreground" Value="#e8a317"/>
-                            <DataTrigger.EnterActions>
-                              <BeginStoryboard x:Name="PendingPulse">
-                                <Storyboard RepeatBehavior="Forever">
-                                  <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                   From="1.0" To="0.15"
-                                                   Duration="0:0:0.55"
-                                                   AutoReverse="True"/>
-                                </Storyboard>
-                              </BeginStoryboard>
-                            </DataTrigger.EnterActions>
-                            <DataTrigger.ExitActions>
-                              <StopStoryboard BeginStoryboardName="PendingPulse"/>
-                            </DataTrigger.ExitActions>
-                          </DataTrigger>
-                        </Style.Triggers>
-                      </Style>
-                    </TextBlock.Style>
-                  </TextBlock>
-                  <TextBlock Text="{Binding Badge}" Foreground="{StaticResource AccentBrush}"
-                             FontSize="11" FontWeight="Bold" VerticalAlignment="Center"
-                             Margin="0,0,6,0" MinWidth="10"/>
-                  <Grid VerticalAlignment="Center">
-                    <TextBlock Text="{Binding DisplayName}"
-                               Foreground="{StaticResource TextBrush}"
-                               FontSize="12"
-                               MouseLeftButtonDown="DisplayName_DoubleClick"/>
-                    <TextBox Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}"
-                             FontSize="12" Visibility="Collapsed"
-                             Background="#1a1a2e" Foreground="{StaticResource TextBrush}"
-                             BorderBrush="{StaticResource AccentBrush}" BorderThickness="1"
-                             Padding="2,0" MinWidth="80"
-                             KeyDown="DisplayNameEdit_KeyDown"
-                             LostFocus="DisplayNameEdit_LostFocus"/>
-                  </Grid>
-                </StackPanel>
-              </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-
-        <!-- Link status feedback (shown briefly during the link gesture) -->
-        <TextBlock x:Name="LinkStatus"
-                   Foreground="{StaticResource SubtextBrush}"
+        <!-- Notices: TTS errors, headset status (fixed two-line area so the layout never jumps) -->
+        <TextBlock x:Name="StatusMessage"
+                   Foreground="{StaticResource AccentBrush}"
                    FontSize="10" TextAlignment="Center"
-                   Margin="0,0,0,4"/>
-
-        <!-- Always-visible link button: click to add a new linked terminal -->
-        <Button x:Name="LinkButton"
-                Content="+ Link terminal"
-                Style="{StaticResource ActionButtonStyle}"
-                Click="LinkButton_Click"
-                Margin="0,0,0,8"/>
+                   TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                   Height="28" Margin="0,4,0,4"/>
 
         <!-- Separator -->
         <Border Height="1" Background="#2a2a4a" Margin="0,0,0,10"/>
@@ -247,19 +203,33 @@
         </Grid>
 
         <!-- Separator -->
-        <Border Height="1" Background="#2a2a4a" Margin="0,0,0,8"/>
+        <Border Height="1" Background="#2a2a4a" Margin="0,0,0,4"/>
 
-        <!-- Hotkey reference -->
-        <TextBlock Text="HOTKEYS  —  global, work in any window"
-                   Foreground="{StaticResource SubtextBrush}"
-                   FontSize="10" FontWeight="Bold" Margin="0,0,0,6"/>
-        <Grid>
+        <!-- Hotkey reference — collapsed by default, click the header to expand -->
+        <Button x:Name="HotkeysToggle" Click="HotkeysToggle_Click"
+                Cursor="Hand" HorizontalContentAlignment="Left"
+                Foreground="{StaticResource SubtextBrush}">
+          <Button.Template>
+            <ControlTemplate TargetType="Button">
+              <Border x:Name="Bd" Background="Transparent" CornerRadius="4" Padding="2,4">
+                <ContentPresenter/>
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="Bd" Property="Background" Value="#2a2a4a"/>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Button.Template>
+          <TextBlock x:Name="HotkeysToggleLabel" Text="▸  HOTKEYS"
+                     FontSize="10" FontWeight="Bold"/>
+        </Button>
+        <Grid x:Name="HotkeysPanel" Visibility="Collapsed" Margin="0,4,0,0">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="120"/>
             <ColumnDefinition Width="*"/>
           </Grid.ColumnDefinitions>
           <Grid.RowDefinitions>
-            <RowDefinition Height="18"/>
             <RowDefinition Height="18"/>
             <RowDefinition Height="18"/>
             <RowDefinition Height="18"/>
@@ -289,17 +259,14 @@
           <TextBlock Grid.Row="5" Grid.Column="0" Text="Ctrl+Alt+↓"       Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
           <TextBlock Grid.Row="5" Grid.Column="1" Text="Slow down"        Foreground="{StaticResource TextBrush}"    FontSize="10"/>
 
-          <TextBlock Grid.Row="6" Grid.Column="0" Text="Ctrl+Alt+← / →"  Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="6" Grid.Column="1" Text="Switch terminal"  Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+          <TextBlock Grid.Row="6" Grid.Column="0" Text="Headset unmute"   Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="6" Grid.Column="1" Text="Start recording"  Foreground="{StaticResource TextBrush}"    FontSize="10"/>
 
-          <TextBlock Grid.Row="7" Grid.Column="0" Text="Headset unmute"   Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="7" Grid.Column="1" Text="Start recording"  Foreground="{StaticResource TextBrush}"    FontSize="10"/>
+          <TextBlock Grid.Row="7" Grid.Column="0" Text="Headset mute"     Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="7" Grid.Column="1" Text="Stop + transcribe" Foreground="{StaticResource TextBrush}"   FontSize="10"/>
 
-          <TextBlock Grid.Row="8" Grid.Column="0" Text="Headset mute"     Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="8" Grid.Column="1" Text="Stop + transcribe" Foreground="{StaticResource TextBrush}"   FontSize="10"/>
-
-          <TextBlock Grid.Row="9" Grid.Column="0" Text="Headset hang-up"  Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
-          <TextBlock Grid.Row="9" Grid.Column="1" Text="Submit / cycle pending" Foreground="{StaticResource TextBrush}" FontSize="10"/>
+          <TextBlock Grid.Row="8" Grid.Column="0" Text="Headset hang-up"  Foreground="{StaticResource AccentBrush}"  FontSize="10" FontFamily="Consolas"/>
+          <TextBlock Grid.Row="8" Grid.Column="1" Text="Submit, else stop audio" Foreground="{StaticResource TextBrush}" FontSize="10"/>
         </Grid>
 
       </StackPanel>

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.0 — 2026-10-15
+
+### Changed
+- **Single-terminal app** — removed multi-terminal support (terminal list, badges, rename, Ctrl+Alt+←/→ switching, pending-session beeps, hang-up cycling). Linking writes one `claudevoice_link.txt` with the terminal's PID; hooks speak only when running inside it. Replaces rewriting ~30 badge files + a WMI process scan every 3 s.
+- **Headset hang-up** — submits a waiting transcription, otherwise stops the voice
+- **Links one Windows Terminal tab, not all of Windows Terminal** — WT runs every window/tab in one process; the app now matches the clicked window's title to each tab's console title and links that tab's shell. Typing/submit refused (dictation copied to clipboard) when the linked tab isn't showing
+- **Unlink button** next to Re-link
+- **Hotkey list** collapsible, collapsed on every launch; window height fits the content
+- Python hooks now version-controlled in `hooks/` (deployed to `~/.claude/`), shared logic moved into `tts_utils.py`
+
+### Fixed
+- **Silent TTS failures** — edge-tts leaves an empty mp3 on failure, which the app treated as success. Now checks exit code + file size and shows a plain message (403 → "run pip install -U edge-tts")
+- **Speech could die until restart** — any unexpected error stopped the playback loop for good; loop now survives errors
+- **Long responses not spoken** — text passed to edge-tts via `--file` instead of the command line (~32k char limit)
+- **Dictated + ( ) [ ] ^ % ~ garbled** — SendKeys escaping re-escaped its own braces; now one pass
+
+### Removed
+- `TerminalService`, `TerminalSession`, System.Management (WMI) package
+- Legacy scripts in `~/.claude/`: tts_speak.py, tts_toggle.py, stt_listen.py, write_active.py, start_claude.py
+
 ## 0.9.0 — 2026-03-25
 
 ### Fixed

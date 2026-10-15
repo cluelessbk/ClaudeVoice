@@ -4,7 +4,7 @@ namespace ClaudeVoice.Services;
 
 /// <summary>
 /// Watches audio_queue/ for new .txt files written by the Python hooks.
-/// Also monitors tts_disabled, tts_rate.txt, and active_session.txt.
+/// Also monitors the tts_disabled flag and tts_rate.txt.
 /// </summary>
 public class FileWatcherService : IDisposable
 {
@@ -19,7 +19,6 @@ public class FileWatcherService : IDisposable
     public event Action<string>? AudioFileArrived;
     public event Action<bool>?   TtsEnabledChanged;
     public event Action<int>?    TtsRateChanged;
-    public event Action<string>? ActiveSessionChanged;
 
     public FileWatcherService()
     {
@@ -60,18 +59,6 @@ public class FileWatcherService : IDisposable
                 if (TryReadRate(e.FullPath, out var rate))
                     TtsRateChanged?.Invoke(rate);
                 break;
-            case "active_session.txt":
-                // fix #9: small delay before reading — Python may still be writing the file
-                Task.Delay(150).ContinueWith(_ =>
-                {
-                    try
-                    {
-                        if (File.Exists(e.FullPath))
-                            ActiveSessionChanged?.Invoke(File.ReadAllText(e.FullPath).Trim());
-                    }
-                    catch { }
-                });
-                break;
         }
     }
 
@@ -93,12 +80,6 @@ public class FileWatcherService : IDisposable
         return TryReadRate(f, out var r) ? r : 0;
     }
 
-    public string ReadActiveSession()
-    {
-        var f = Path.Combine(_claudeDir, "active_session.txt");
-        return File.Exists(f) ? File.ReadAllText(f).Trim() : "";
-    }
-
     public void WriteTtsEnabled(bool enabled)
     {
         var flag = Path.Combine(_claudeDir, "tts_disabled");
@@ -109,9 +90,6 @@ public class FileWatcherService : IDisposable
 
     public void WriteTtsRate(int rate)
         => File.WriteAllText(Path.Combine(_claudeDir, "tts_rate.txt"), rate.ToString());
-
-    public void WriteActiveSession(string transcriptPath)
-        => File.WriteAllText(Path.Combine(_claudeDir, "active_session.txt"), transcriptPath);
 
     public string[] GetQueueFiles()
     {

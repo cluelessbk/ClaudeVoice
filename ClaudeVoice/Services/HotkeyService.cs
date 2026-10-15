@@ -21,8 +21,6 @@ public class HotkeyService : IDisposable
     private const uint VK_T               = 0x54;
     private const uint VK_UP              = 0x26;
     private const uint VK_DOWN            = 0x28;
-    private const uint VK_LEFT            = 0x25;
-    private const uint VK_RIGHT           = 0x27;
     private const uint VK_X               = 0x58;
     private const uint VK_R               = 0x52;
     private const uint VK_MEDIA_PLAY_PAUSE = 0xB3;
@@ -33,8 +31,6 @@ public class HotkeyService : IDisposable
     private const int ID_SPEED_DOWN    = 9004;
     private const int ID_STOP          = 9005;
     private const int ID_REREAD        = 9006;
-    private const int ID_NEXT_TERMINAL = 9008;
-    private const int ID_PREV_TERMINAL = 9009;
 
     // Low-level keyboard hook constants
     private const int WH_KEYBOARD_LL  = 13;
@@ -69,7 +65,6 @@ public class HotkeyService : IDisposable
     private bool  _spaceDown    = false;
     private bool? _micHidMuted  = null;  // null = not yet observed; avoids firing on first HID report
     private volatile bool _submitPending  = false;
-    private volatile bool _cycleEnabled   = false;
 
     // Events fired by RegisterHotKey
     public event Action? ToggleTtsPressed;
@@ -77,42 +72,25 @@ public class HotkeyService : IDisposable
     public event Action? SpeedDownPressed;
     public event Action? StopPressed;
     public event Action? ReReadPressed;
-    public event Action? NextTerminalPressed;
-    public event Action? PrevTerminalPressed;
 
     // Events fired by the keyboard hook (hold-to-speak + media key)
     public event Action? SpeakStarted;       // Ctrl+Space pressed down
     public event Action? SpeakReleased;      // Ctrl+Space released
-    public event Action? MediaSubmitPressed; // Headset Play when submit is pending
-    public event Action? MediaCyclePressed;  // Headset Play when sessions with pending audio exist
-
-    // Fired when HID Play button (0x0080) is pressed on the headset
-    public event Action? HidButtonPressed;
+    public event Action? SubmitPressed;      // Headset button when a transcription is waiting
 
     /// <summary>Set after a transcription lands — next Play press sends Enter.</summary>
     public void SetSubmitPending(bool pending) => _submitPending = pending;
 
-    /// <summary>Set by MainWindow whenever any session has a 🔔 badge.</summary>
-    public void SetCycleEnabled(bool enabled) => _cycleEnabled = enabled;
-
     /// <summary>
-    /// Applies the same priority logic as the keyboard media play/pause key.
-    /// Called by JabraService when the headset play/answer button fires a HookSwitch signal.
+    /// If a transcription is waiting to be submitted, fires SubmitPressed and returns true.
+    /// Used by every headset button that means "submit".
     /// </summary>
-    public bool TriggerMediaPlay()
+    public bool TrySubmit()
     {
-        if (_submitPending)
-        {
-            _submitPending = false;
-            MediaSubmitPressed?.Invoke();
-            return true;
-        }
-        if (_cycleEnabled)
-        {
-            MediaCyclePressed?.Invoke();
-            return true;
-        }
-        return false;
+        if (!_submitPending) return false;
+        _submitPending = false;
+        SubmitPressed?.Invoke();
+        return true;
     }
 
     public HotkeyService(Window window)
@@ -155,8 +133,6 @@ public class HotkeyService : IDisposable
         RegisterHotKey(_hwnd, ID_SPEED_DOWN,    MOD_CONTROL | MOD_ALT   | MOD_NOREPEAT, VK_DOWN);
         RegisterHotKey(_hwnd, ID_STOP,          MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_X);
         RegisterHotKey(_hwnd, ID_REREAD,        MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_R);
-        RegisterHotKey(_hwnd, ID_NEXT_TERMINAL, MOD_CONTROL | MOD_ALT   | MOD_NOREPEAT, VK_RIGHT);
-        RegisterHotKey(_hwnd, ID_PREV_TERMINAL, MOD_CONTROL | MOD_ALT   | MOD_NOREPEAT, VK_LEFT);
     }
 
     private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -197,24 +173,10 @@ public class HotkeyService : IDisposable
                 return (IntPtr)1; // consume — prevent double-fire via Windows audio endpoint mute
             }
 
-            // Headset Play/Pause button — priority order:
-            //   1. Submit pending (Enter) — always takes priority
-            //   2. Pending sessions to cycle to
-            //   3. Pass through to media player (Spotify etc.)
-            if (vkCode == VK_MEDIA_PLAY_PAUSE && isDown)
-            {
-                if (_submitPending)
-                {
-                    _submitPending = false;
-                    MediaSubmitPressed?.Invoke();
-                    return (IntPtr)1;
-                }
-                if (_cycleEnabled)
-                {
-                    MediaCyclePressed?.Invoke();
-                    return (IntPtr)1;
-                }
-            }
+            // Headset Play/Pause: submit a waiting transcription, otherwise
+            // pass through to the media player (Spotify etc.)
+            if (vkCode == VK_MEDIA_PLAY_PAUSE && isDown && TrySubmit())
+                return (IntPtr)1;
         }
         return CallNextHookEx(_hookHandle, nCode, wParam, lParam);
     }
@@ -231,8 +193,6 @@ public class HotkeyService : IDisposable
                 case ID_SPEED_DOWN:    SpeedDownPressed?.Invoke();    break;
                 case ID_STOP:          StopPressed?.Invoke();         break;
                 case ID_REREAD:        ReReadPressed?.Invoke();       break;
-                case ID_NEXT_TERMINAL: NextTerminalPressed?.Invoke(); break;
-                case ID_PREV_TERMINAL: PrevTerminalPressed?.Invoke(); break;
             }
             handled = true;
         }
@@ -312,11 +272,11 @@ public class HotkeyService : IDisposable
                 usages[i] == HID_USAGE_JABRA_PLAY) buttonNow = true;
         }
 
-        // Play button detection — fire on press (transition to true)
+        // Play/hook-switch button (non-Jabra headsets) — submit on press
         if (buttonNow && !_hookSwitchDown)
         {
             _hookSwitchDown = true;
-            HidButtonPressed?.Invoke();
+            TrySubmit();
         }
         else if (!buttonNow)
         {
@@ -381,7 +341,7 @@ public class HotkeyService : IDisposable
             UnhookWindowsHookEx(_hookHandle);
             _hookHandle = IntPtr.Zero;
         }
-        for (int id = ID_TOGGLE_TTS; id <= ID_PREV_TERMINAL; id++)
+        for (int id = ID_TOGGLE_TTS; id <= ID_REREAD; id++)
             UnregisterHotKey(_hwnd, id);
         _source?.RemoveHook(WndProc);
         _source?.Dispose();
