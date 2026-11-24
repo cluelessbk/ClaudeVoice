@@ -24,9 +24,14 @@ public class TerminalLink : IDisposable
     private readonly DispatcherTimer _monitor;
     private static readonly object ConsoleLock = new();
 
+    private readonly string _claudeDir;
+    private readonly TranscriptReader _reader;
+
     public IntPtr WindowHandle { get; private set; }
     public int    ProcessId    { get; private set; }   // tab shell (Windows Terminal) or window process
     public bool   IsTab        { get; private set; }   // true = a Windows Terminal tab
+    public bool   IsDesktop    { get; private set; }   // true = a Claude desktop-app Code session
+    public string SessionTitle { get; private set; } = "";   // desktop only
     public string DisplayName  { get; private set; } = "";
     public bool   IsLinked     => WindowHandle != IntPtr.Zero;
 
@@ -35,7 +40,9 @@ public class TerminalLink : IDisposable
 
     public TerminalLink(string claudeDir)
     {
-        _linkFile = Path.Combine(claudeDir, "claudevoice_link.txt");
+        _claudeDir = claudeDir;
+        _reader    = new TranscriptReader(claudeDir);
+        _linkFile  = Path.Combine(claudeDir, "claudevoice_link.txt");
         DeleteLinkFile();   // a link never survives an app restart
 
         _monitor = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -49,6 +56,8 @@ public class TerminalLink : IDisposable
     /// </summary>
     public string? Link(IntPtr hwnd)
     {
+        if (DesktopApp.IsClaudeWindow(hwnd)) return LinkDesktop(hwnd);
+
         GetWindowThreadProcessId(hwnd, out uint windowPid);
 
         int    pid   = (int)windowPid;
@@ -82,10 +91,41 @@ public class TerminalLink : IDisposable
         try { File.WriteAllText(_linkFile, pid.ToString()); }
         catch (Exception ex) { return $"Couldn't write link file: {ex.Message}"; }
 
+        _reader.Stop();
         WindowHandle = hwnd;
         ProcessId    = pid;
         IsTab        = isTab;
+        IsDesktop    = false;
+        SessionTitle = "";
         DisplayName  = ShortName(name);
+        Changed?.Invoke();
+        return null;
+    }
+
+    /// <summary>
+    /// Claude desktop app: hooks don't run there, so instead of writing a PID we
+    /// follow the transcript of the Code session on screen (matched by its title).
+    /// </summary>
+    private string? LinkDesktop(IntPtr hwnd)
+    {
+        var title = DesktopApp.VisibleSessionTitle(hwnd);
+        if (string.IsNullOrEmpty(title))
+            return "Open a Code session in the Claude app, then link";
+
+        var path = TranscriptReader.FindTranscript(_claudeDir, title);
+        if (path == null)
+            return "Couldn't find this session's transcript — send it a message first, then link";
+
+        DeleteLinkFile();   // no PID: terminal hooks stay silent while a desktop session is linked
+        _reader.Start(path);
+
+        GetWindowThreadProcessId(hwnd, out uint windowPid);
+        WindowHandle = hwnd;
+        ProcessId    = (int)windowPid;
+        IsTab        = false;
+        IsDesktop    = true;
+        SessionTitle = title;
+        DisplayName  = ShortName(title);
         Changed?.Invoke();
         return null;
     }
@@ -93,20 +133,25 @@ public class TerminalLink : IDisposable
     public void Unlink()
     {
         DeleteLinkFile();
+        _reader.Stop();
         WindowHandle = IntPtr.Zero;
         ProcessId    = 0;
         IsTab        = false;
+        IsDesktop    = false;
+        SessionTitle = "";
         DisplayName  = "";
         Changed?.Invoke();
     }
 
     /// <summary>
     /// True if keystrokes sent to the window would land in the linked terminal —
-    /// for a Windows Terminal tab, only when that tab is the one showing.
+    /// for a Windows Terminal tab, only when that tab is the one showing; for the
+    /// Claude app, only when the linked session is the one on screen.
     /// </summary>
     public bool IsLinkedTabActive()
     {
         if (!IsLinked) return false;
+        if (IsDesktop) return DesktopApp.VisibleSessionTitle(WindowHandle) == SessionTitle;
         if (!IsTab)    return true;
         return Normalize(GetWindowTitle(WindowHandle)) == Normalize(GetConsoleTitle(ProcessId));
     }
@@ -116,6 +161,7 @@ public class TerminalLink : IDisposable
         if (!IsLinked) return;
 
         if (!IsWindow(WindowHandle) || !IsProcessAlive(ProcessId)) { Unlink(); return; }
+        if (IsDesktop) return;   // name is the session title; the transcript keeps being followed
 
         // Titles change (Claude Code names the conversation) — keep the name current
         var title = IsTab ? GetConsoleTitle(ProcessId) : GetWindowTitle(WindowHandle);
@@ -203,6 +249,7 @@ public class TerminalLink : IDisposable
     public void Dispose()
     {
         _monitor.Stop();
+        _reader.Dispose();
         DeleteLinkFile();
     }
 

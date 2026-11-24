@@ -18,6 +18,14 @@ Clicking "Link terminal" then a terminal window writes one process ID to `~/.cla
 
 Typing and headset-submit go to whichever tab is showing in the linked window, so they are refused (dictation copied to clipboard) when the linked tab isn't the active one.
 
+### Claude desktop app (v0.11.0)
+
+Hooks from `~/.claude/settings.json` do NOT fire in desktop-app Code sessions (tested 2026-11-24; docs say they should, cause unknown, folder is trusted). So linking a Claude app window (`DesktopApp.IsClaudeWindow`: process `claude`, class `Chrome_WidgetWin_1`) works without hooks and writes no link file:
+- **Which session:** UI Automation document named `<session title> - Claude Code` = the session on screen. `TranscriptReader.FindTranscript` picks the newest `.jsonl` under `~/.claude/projects/` whose latest `custom-title` entry equals that title.
+- **Speech:** `TranscriptReader` tails that file from its end (500 ms poll), each `type:"assistant"` non-sidechain line with text blocks → cleaned (C# port of `clean_for_tts`) → `audio_queue/`. Temp file is written outside `audio_queue/` then moved in (a rename inside the folder doesn't fire the watcher's Created event).
+- **Typing:** `ValuePattern.SetValue` on the Edit named "Prompt" (empty box reports `"\n"`); submit = `InvokePattern` on the Button named "Send" (queues while Claude is busy). Refused when the linked session isn't on screen.
+- Transcript format is internal to Claude Code and may change between versions.
+
 ## File map
 
 | Feature | File |
@@ -26,6 +34,8 @@ Typing and headset-submit go to whichever tab is showing in the linked window, s
 | File watching (audio_queue, flags) | `Services/FileWatcherService.cs` |
 | Mic recording + Whisper STT | `Services/SttService.cs` |
 | The one linked terminal + link file | `Services/TerminalLink.cs` |
+| Claude app window (session title, Prompt box, Send) | `Services/DesktopApp.cs` |
+| Follow desktop session transcript → audio_queue | `Services/TranscriptReader.cs` |
 | Focus terminal + type text + Enter | `Services/TerminalTypist.cs` |
 | Keyboard hotkeys + media keys | `Services/HotkeyService.cs` |
 | Jabra headset (mic arm + hang-up btn) | `Services/JabraService.cs` |
@@ -55,7 +65,8 @@ Launch: `D:/My Claude/TalkingPoint/publish/ClaudeVoice.exe`
 
 1. **Silence + "Voice service refused (403)"** = Microsoft rotated edge-tts's access token. Fix: `pip install -U edge-tts` (happened Mar 2026 and Oct 2026). No restart needed.
 2. Linking fails with a message if two WT tabs have identical titles (e.g. two fresh sessions) — send a message in one first.
-3. `_submitPending` stays set if the user presses Enter manually, so the next hang-up press sends an extra Enter instead of stopping audio.
+3. Terminal only: `_submitPending` stays set if the user presses Enter manually, so the next hang-up press sends an extra Enter instead of stopping audio. (Claude app: fixed — empty box → stop voice.)
+4. Claude app: a brand-new session with no title can't be linked until it has one (send it a message first). Renaming a linked session breaks the "session on screen" check — re-link.
 
 ## Design decisions
 

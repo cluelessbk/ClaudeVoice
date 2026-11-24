@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.0 — 2026-11-24
+
+### Added
+- **Claude desktop app support** (terminal linking unchanged). Click "Link terminal", then the Claude app window: links the Code session on screen.
+  - Speech: hooks don't run in desktop sessions, so the app follows the session's transcript (`~/.claude/projects/<project>/<session-id>.jsonl`, matched by its `custom-title`) and queues each new assistant text block — heard mid-turn like the PreToolUse hook
+  - Dictation: put into the app's "Prompt" box via UI Automation (appended to any draft); submit presses the app's "Send" button. No focus change needed
+  - Submit with an empty box stops the voice (fixes known issue #3 for the app)
+
 ## 0.10.1 — 2026-10-15
 
 ### Fixed

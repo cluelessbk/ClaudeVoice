@@ -44,11 +44,24 @@ public partial class MainWindow : Window
         {
             if (!CanTypeIntoLink(text)) return;
             var hwnd = _link.WindowHandle;
-            Task.Run(() =>
+            if (_link.IsDesktop)
             {
-                TerminalTypist.FocusAndType(text, hwnd);
-                PlayTranscriptionDing();
-            });
+                // Claude app: put the text in its message box (no focus change needed)
+                Task.Run(() =>
+                {
+                    var error = DesktopApp.AppendToPrompt(hwnd, text);
+                    if (error == null) PlayTranscriptionDing();
+                    else Dispatcher.Invoke(() => CopyDictation(text, error));
+                });
+            }
+            else
+            {
+                Task.Run(() =>
+                {
+                    TerminalTypist.FocusAndType(text, hwnd);
+                    PlayTranscriptionDing();
+                });
+            }
             _hotkeys?.SetSubmitPending(true);
         });
 
@@ -90,7 +103,20 @@ public partial class MainWindow : Window
         {
             if (!CanTypeIntoLink(null)) return;
             var hwnd = _link.WindowHandle;
-            Task.Run(() => TerminalTypist.SendEnter(hwnd));
+            if (_link.IsDesktop)
+            {
+                Task.Run(() =>
+                {
+                    // Box already empty (e.g. sent by hand) → treat the press as "stop the voice"
+                    var error = DesktopApp.ClickSend(hwnd);
+                    if (error == "Nothing to send") _tts.StopCurrent();
+                    else if (error != null) Dispatcher.Invoke(() => StatusMessage.Text = error);
+                });
+            }
+            else
+            {
+                Task.Run(() => TerminalTypist.SendEnter(hwnd));
+            }
         });
 
         _fw.Start();
@@ -329,17 +355,23 @@ public partial class MainWindow : Window
     {
         string? problem =
             !_link.IsLinked             ? "Link a terminal first" :
-            !_link.IsLinkedTabActive()  ? $"Switch to the linked tab ({_link.DisplayName})" :
+            !_link.IsLinkedTabActive()  ? (_link.IsDesktop
+                                              ? $"Open the linked session ({_link.DisplayName})"
+                                              : $"Switch to the linked tab ({_link.DisplayName})") :
             null;
         if (problem == null) return true;
 
-        if (dictatedText != null)
-        {
-            try { Clipboard.SetText(dictatedText); problem += " — dictation copied to clipboard"; }
-            catch { problem += " — dictation not sent"; }
-        }
-        StatusMessage.Text = problem;
+        if (dictatedText != null) CopyDictation(dictatedText, problem);
+        else StatusMessage.Text = problem;
         return false;
+    }
+
+    /// <summary>Keeps dictation that couldn't be delivered on the clipboard and says why.</summary>
+    private void CopyDictation(string text, string problem)
+    {
+        try { Clipboard.SetText(text); problem += " — dictation copied to clipboard"; }
+        catch { problem += " — dictation not sent"; }
+        StatusMessage.Text = problem;
     }
 
     // Link gesture: user clicks "Link terminal", then clicks their terminal window.
@@ -351,7 +383,7 @@ public partial class MainWindow : Window
     private void LinkButton_Click(object sender, RoutedEventArgs e)
     {
         LinkButton.IsEnabled = false;
-        LinkStatus.Text = "Click your terminal window…";
+        LinkStatus.Text = "Click your terminal or Claude app…";
         _linkTickCount = 0;
 
         _linkTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
